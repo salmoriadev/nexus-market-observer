@@ -1,0 +1,8 @@
+/target
+/.env
+/.sqlx
+*.log
+.DS_Store
+.idea/
+.vscode/
+
