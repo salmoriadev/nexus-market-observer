@@ -129,15 +129,30 @@ On Linux hosts whose firewall blocks outbound traffic from Docker bridges, use t
 COMPOSE_FILE=docker-compose.yml:docker-compose.host-network.yml make live
 ```
 
+The override preserves a custom `DATABASE_URL`, maps the default `postgres` hostname to a loopback-only PostgreSQL listener, and uses `BACKEND_PORT` for both the backend listener and Prometheus target.
+Host-network mode requires local ports 5432 and 9090 to be free for the bundled PostgreSQL and Prometheus services. `BACKEND_PORT` and `GRAFANA_PORT` remain configurable.
+
+To use PostgreSQL managed outside this Compose project, set its URL and apply the external-database override last:
+
+```bash
+export DATABASE_URL=postgres://user:password@database.example:5432/nexus_market
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.external-db.yml \
+  up --build -d
+```
+
+This removes the backend's Compose dependency on `postgres` and leaves the bundled database inactive. The override can also follow `docker-compose.host-network.yml`; in that mode only Prometheus keeps its fixed port 9090. The backend still performs its bounded startup connection retry, so the external database must be reachable.
+
 ## Configuration
 
 | Variable | Default/example | Validation |
 |---|---|---|
 | `APP_ENV` | `development` | `development`, `production`, or `test`; production logs JSON |
 | `HTTP_HOST` | `0.0.0.0` | Valid IP address |
-| `HTTP_PORT` | `8080` | Native process port, range 1–65535; Compose fixes the internal contract at 8080 |
-| `BACKEND_PORT` | `8080` | Localhost port published by Compose |
-| `DATABASE_URL` | `postgres://nexus:nexus@postgres:5432/nexus_market` | Required |
+| `HTTP_PORT` | `8080` | Native process port, range 1–65535; bridge Compose fixes the internal contract at 8080 |
+| `BACKEND_PORT` | `8080` | Localhost publication in bridge mode and backend listener in host-network mode |
+| `DATABASE_URL` | `postgres://nexus:nexus@postgres:5432/nexus_market` | Required; use `docker-compose.external-db.yml` for independently managed PostgreSQL |
 | `MARKET_DATA_SOURCE` | `replay` | `replay` or `nexus_live` |
 | `NEXUS_NETWORK` | `testnet` | Only `testnet`; mainnet fails startup |
 | `NEXUS_MARKET` | `BTC-USDX-PERP` | Non-empty; replay provides only this fixture |
@@ -149,7 +164,7 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.host-network.yml make live
 | `GRAFANA_ADMIN_PASSWORD` | `admin` | Change outside local development |
 | `GRAFANA_PORT` | `3000` | Published Grafana port |
 
-Application environment access is centralized in `Config`. `HTTP_HOST` and `HTTP_PORT` apply directly to native runs; Compose fixes its internal service address and exposes `BACKEND_PORT` on localhost so Prometheus discovery cannot drift. There are no API-key, secret-key, private-key, mainnet, wallet, or trading settings.
+Application environment access is centralized in `Config`. `HTTP_HOST` and `HTTP_PORT` apply directly to native runs. Bridge Compose keeps the container at port 8080 and maps `BACKEND_PORT`; the Linux host-network override uses `BACKEND_PORT` consistently for the process, smoke test, and rendered Prometheus target. There are no API-key, secret-key, private-key, mainnet, wallet, or trading settings.
 
 ## API
 
@@ -219,13 +234,14 @@ make test-integration
 cargo build --release --locked
 cargo install cargo-audit --version 0.22.2 --locked
 make audit
+make validate-compose
 make demo
 make smoke
 ```
 
-`make test` runs deterministic tests without infrastructure. `make test-integration` requires PostgreSQL and fails clearly when it is unavailable; CI always runs it through `cargo test --locked --all-features`. Tests cover analytics precision and invalid books, status transitions, controlled stale detection, official SDK REST and stream fixtures, replay parsing and recovery, in-memory Axum routes, migrations, durable deduplication, PostgreSQL precision/provenance, source-isolated history, container monitoring, and bounded shutdown. CI never contacts Nexus.
+`make test` runs deterministic tests without infrastructure. `make test-integration` requires PostgreSQL and fails clearly when it is unavailable; an explicitly supplied `DATABASE_URL` takes precedence over its localhost development default. CI always runs the integration suite through `cargo test --locked --all-features`. Tests cover analytics precision and invalid books, status transitions, controlled stale detection, official SDK REST and stream fixtures, replay parsing and recovery, in-memory Axum routes, migrations, durable deduplication, PostgreSQL precision/provenance, source-isolated history, container monitoring, and bounded shutdown. CI runs replay smoke tests in bridge mode and in Linux host-network mode against independently managed PostgreSQL; it never contacts Nexus.
 
-The RustSec audit includes two documented optional-dependency exceptions in `.cargo/audit.toml`. The audit script independently fails if either vulnerable crate becomes reachable in the active build graph.
+The RustSec audit includes two documented optional-dependency exceptions in `.cargo/audit.toml`. The audit script independently resolves all features and fails if either vulnerable crate becomes reachable in the normal, build, or development graph. The Compose contract test checks custom database URLs, alternate backend ports, loopback bindings, both network modes, and external-database independence.
 
 See [docs/demo-script.md](docs/demo-script.md) for a concise portfolio walkthrough.
 

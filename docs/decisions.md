@@ -74,7 +74,7 @@
 
 **Context.** The demo uses intentionally simple development credentials for PostgreSQL and Grafana. Publishing those services on every host interface would be unsafe on untrusted networks.
 
-**Decision.** Bind all default Compose publications to `127.0.0.1`, keep the backend's internal container port fixed at 8080, and use `BACKEND_PORT` only for the host-side mapping. Treat the host-network override as a Linux troubleshooting path with explicit loopback listeners.
+**Decision.** Bind all default Compose publications to `127.0.0.1`. Bridge mode keeps the backend's internal port fixed at 8080 and uses `BACKEND_PORT` for the host-side mapping. The Linux host-network override uses `BACKEND_PORT` for the backend listener and rendered Prometheus target, preserves custom `DATABASE_URL` values, and maps the default `postgres` hostname to a loopback-only PostgreSQL listener. A separate, last-applied override removes the bundled PostgreSQL dependency when an operator supplies an independently managed database.
 
 **Positive consequences.** The quick start is reachable from the evaluator's browser without exposing the database, dashboard, or metrics endpoint to the local network. Prometheus service discovery cannot drift when a host port changes.
 

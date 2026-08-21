@@ -54,6 +54,8 @@ jobs:
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit Rust dependencies
         run: make audit
+      - name: Validate Compose contracts
+        run: make validate-compose
       - name: Build release binary
         run: cargo build --release --locked
       - name: Build Docker image
@@ -73,14 +75,72 @@ jobs:
         run: make demo
       - name: Run end-to-end smoke test
         run: make smoke
+      - name: Stop bridge demo before host-network check
+        run: docker compose -p nexus-market-observer-demo down --volumes
+      - name: Start independent PostgreSQL for external-database check
+        run: |
+          docker run --detach \
+            --name nexus-external-postgres \
+            --network host \
+            --env POSTGRES_USER=nexus \
+            --env POSTGRES_PASSWORD=nexus \
+            --env POSTGRES_DB=nexus_market \
+            postgres:17-bookworm \
+            -c listen_addresses=127.0.0.1
+          for _ in {1..30}; do
+            if docker exec nexus-external-postgres pg_isready -U nexus -d nexus_market; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Start host-network demo with external PostgreSQL and alternate settings
+        env:
+          BACKEND_PORT: 18080
+          DATABASE_URL: postgres://nexus:nexus@127.0.0.1:5432/nexus_market
+          GRAFANA_PORT: 3300
+          MARKET_DATA_SOURCE: replay
+        run: >-
+          docker compose
+          --file docker-compose.yml
+          --file docker-compose.host-network.yml
+          --file docker-compose.external-db.yml
+          --project-name nexus-market-observer-demo
+          up --build --detach
+      - name: Run host-network smoke test
+        env:
+          BACKEND_PORT: 18080
+          GRAFANA_PORT: 3300
+        run: make smoke
       - name: Validate smoke-test syntax
-        run: bash -n scripts/smoke.sh scripts/audit.sh
+        run: bash -n scripts/smoke.sh scripts/audit.sh scripts/validate-compose.sh
       - name: Show container state
         if: always()
-        run: docker compose -p nexus-market-observer-demo ps
+        run: >-
+          docker compose
+          --file docker-compose.yml
+          --file docker-compose.host-network.yml
+          --file docker-compose.external-db.yml
+          --project-name nexus-market-observer-demo
+          ps
       - name: Show service logs on failure
         if: failure()
-        run: docker compose -p nexus-market-observer-demo logs --no-color
+        run: >-
+          docker compose
+          --file docker-compose.yml
+          --file docker-compose.host-network.yml
+          --file docker-compose.external-db.yml
+          --project-name nexus-market-observer-demo
+          logs --no-color
       - name: Stop deterministic demo
         if: always()
-        run: docker compose -p nexus-market-observer-demo down --volumes
+        run: >-
+          docker compose
+          --file docker-compose.yml
+          --file docker-compose.host-network.yml
+          --file docker-compose.external-db.yml
+          --project-name nexus-market-observer-demo
+          down --volumes
+      - name: Stop independent PostgreSQL
+        if: always()
+        run: docker rm --force nexus-external-postgres 2>/dev/null || true

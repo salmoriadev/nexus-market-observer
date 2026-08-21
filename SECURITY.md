@@ -19,4 +19,4 @@ You should receive an acknowledgement within seven days. The maintainer will val
 - Docker Compose is a localhost development topology, not a production deployment.
 - Development credentials in `.env.example` are intentionally non-secret and must not be reused outside local development.
 
-`cargo audit` scans the lockfile in CI. Two advisories are documented in `.cargo/audit.toml` because Cargo records inactive optional dependencies: `rkyv` is optional serialization support and `rsa` belongs to SQLx's disabled MySQL driver. `scripts/audit.sh` fails if either crate becomes active in the resolved application graph.
+`cargo audit` scans the lockfile in CI. Two advisories are documented in `.cargo/audit.toml` because Cargo records inactive optional dependencies: `rkyv` is optional serialization support and `rsa` belongs to SQLx's disabled MySQL driver. `scripts/audit.sh` resolves all features and fails if either crate becomes active in the normal, build, or development graph.

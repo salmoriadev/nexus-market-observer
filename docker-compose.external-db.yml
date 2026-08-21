@@ -1,0 +1,13 @@
+# Optional override for deployments that provide PostgreSQL independently.
+# Set DATABASE_URL explicitly and apply this file after the base and any
+# networking override. The bundled database is placed behind an inactive
+# profile and the backend relies on its bounded startup retry instead.
+services:
+  backend:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the external PostgreSQL instance}
+    depends_on: !reset []
+
+  postgres:
+    profiles:
+      - bundled-database

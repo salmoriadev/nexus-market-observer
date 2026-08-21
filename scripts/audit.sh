@@ -9,9 +9,9 @@ fi
 cargo audit
 
 # The exceptions in .cargo/audit.toml are valid only while these crate names
-# remain outside the normal/build/dev dependency graph, regardless of version.
+# remain outside the all-features normal/build/dev graph, regardless of version.
 active_exceptions="$({
-  cargo tree --locked --edges normal,build,dev --prefix none \
+  cargo tree --locked --all-features --edges normal,build,dev --prefix none \
     | grep -E '^(rkyv|rsa) v' || true
 })"
 if [[ -n "${active_exceptions}" ]]; then
