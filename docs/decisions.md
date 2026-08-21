@@ -59,3 +59,13 @@
 **Positive consequences.** Fewer failure modes, lower operating cost, and direct ownership of backpressure and recovery behavior.
 
 **Limitations.** There is no cross-process event replay or shared cache. Those capabilities should be added only with a demonstrated multi-consumer or horizontal-scaling requirement.
+
+## ADR-007: Explicit deterministic replay source
+
+**Context.** The public Nexus Exchange Testnet has been intermittently unavailable, and SDK 0.9.1 does not publish a usable Testnet WebSocket origin. A portfolio evaluator still needs a reproducible way to inspect the complete pipeline.
+
+**Decision.** Provide an explicit `replay` source alongside `nexus_live`. Replay uses versioned deterministic fixtures, reports network `demo`, never contacts Nexus, and remains isolated by API provenance, database columns, history filtering, and Compose project volumes.
+
+**Positive consequences.** CI and portfolio demonstrations exercise analytics, persistence, recovery, metrics, and dashboards without depending on an external pre-1.0 service or misrepresenting fixture data as live.
+
+**Limitations.** Replay proves internal behavior, not current Nexus availability or real-time market fidelity. The separate live smoke test remains necessary for end-to-end upstream validation.
