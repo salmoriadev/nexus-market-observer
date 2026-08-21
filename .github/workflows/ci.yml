@@ -42,4 +42,26 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
       - name: Build Docker image
-        run: docker build --tag nexus-market-intelligence:ci .
+        run: docker build --tag nexus-market-observer:ci .
+
+  demo-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Create demo environment
+        run: cp .env.example .env
+      - name: Start deterministic demo
+        run: make demo
+      - name: Run end-to-end smoke test
+        run: make smoke
+      - name: Show container state
+        if: always()
+        run: docker compose -p nexus-market-observer-demo ps
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose -p nexus-market-observer-demo logs --no-color
+      - name: Stop deterministic demo
+        if: always()
+        run: docker compose -p nexus-market-observer-demo down --volumes

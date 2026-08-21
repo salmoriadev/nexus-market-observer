@@ -12,8 +12,8 @@
       "gridPos": {"h": 5, "w": 4, "x": 0, "y": 0},
       "id": 1,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "auto"},
-      "targets": [{"expr": "nexus_ws_connected", "refId": "A"}],
-      "title": "Nexus WebSocket Connection",
+      "targets": [{"expr": "max(nexus_ws_connected)", "refId": "A"}],
+      "title": "Active Source Connection",
       "type": "stat"
     },
     {
@@ -22,7 +22,7 @@
       "gridPos": {"h": 5, "w": 4, "x": 4, "y": 0},
       "id": 2,
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}},
-      "targets": [{"expr": "nexus_market_data_age_seconds", "legendFormat": "{{market}}", "refId": "A"}],
+      "targets": [{"expr": "nexus_market_data_age_seconds", "legendFormat": "{{source}} · {{market}}", "refId": "A"}],
       "title": "Market Data Age",
       "type": "stat"
     },
@@ -31,7 +31,7 @@
       "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
       "id": 3,
-      "targets": [{"expr": "nexus_market_mid_price", "legendFormat": "{{market}}", "refId": "A"}],
+      "targets": [{"expr": "nexus_market_mid_price", "legendFormat": "{{source}} · {{market}}", "refId": "A"}],
       "title": "Mid Price",
       "type": "timeseries"
     },
@@ -40,7 +40,7 @@
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
       "id": 4,
-      "targets": [{"expr": "nexus_market_spread_bps", "legendFormat": "{{market}}", "refId": "A"}],
+      "targets": [{"expr": "nexus_market_spread_bps", "legendFormat": "{{source}} · {{market}}", "refId": "A"}],
       "title": "Spread (basis points)",
       "type": "timeseries"
     },
@@ -49,7 +49,7 @@
       "fieldConfig": {"defaults": {"max": 1, "min": -1}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
       "id": 5,
-      "targets": [{"expr": "nexus_market_imbalance", "legendFormat": "{{market}}", "refId": "A"}],
+      "targets": [{"expr": "nexus_market_imbalance", "legendFormat": "{{source}} · {{market}}", "refId": "A"}],
       "title": "Order Book Imbalance",
       "type": "timeseries"
     },
@@ -58,7 +58,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 8, "y": 8},
       "id": 6,
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}},
-      "targets": [{"expr": "nexus_ws_reconnects_total", "refId": "A"}],
+      "targets": [{"expr": "sum(nexus_ws_reconnects_total)", "refId": "A"}],
       "title": "Reconnects",
       "type": "stat"
     },
@@ -67,8 +67,8 @@
       "gridPos": {"h": 4, "w": 4, "x": 12, "y": 8},
       "id": 7,
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}},
-      "targets": [{"expr": "nexus_ws_lagged_frames_total", "refId": "A"}],
-      "title": "Lagged Frames",
+      "targets": [{"expr": "sum(nexus_ws_lagged_frames_total)", "refId": "A"}],
+      "title": "Sequence Gaps / Lagged Frames",
       "type": "stat"
     },
     {
@@ -103,10 +103,9 @@
   "schemaVersion": 41,
   "tags": ["nexus", "market-data", "rust"],
   "templating": {"list": []},
-  "time": {"from": "now-1h", "to": "now"},
+  "time": {"from": "now-5m", "to": "now"},
   "timezone": "browser",
-  "title": "Nexus Market Intelligence",
-  "uid": "nexus-market-intelligence",
-  "version": 1
+  "title": "Nexus Market Observer",
+  "uid": "nexus-market-observer",
+  "version": 2
 }
-

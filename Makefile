@@ -1,4 +1,8 @@
-.PHONY: build run test lint fmt up down logs smoke
+.PHONY: build run test lint fmt up demo live down down-live logs logs-live smoke smoke-live
+
+COMPOSE := docker compose
+DEMO_PROJECT := nexus-market-observer-demo
+LIVE_PROJECT := nexus-market-observer-live
 
 build:
 	cargo build --locked
@@ -16,14 +20,28 @@ fmt:
 	cargo fmt --all
 
 up:
-	docker compose up --build -d
+	$(MAKE) demo
+
+demo:
+	MARKET_DATA_SOURCE=replay $(COMPOSE) -p $(DEMO_PROJECT) up --build -d
+
+live:
+	MARKET_DATA_SOURCE=nexus_live $(COMPOSE) -p $(LIVE_PROJECT) up --build -d
 
 down:
-	docker compose down
+	$(COMPOSE) -p $(DEMO_PROJECT) down
+
+down-live:
+	$(COMPOSE) -p $(LIVE_PROJECT) down
 
 logs:
-	docker compose logs --follow backend
+	$(COMPOSE) -p $(DEMO_PROJECT) logs --follow backend
+
+logs-live:
+	$(COMPOSE) -p $(LIVE_PROJECT) logs --follow backend
 
 smoke:
-	./scripts/smoke.sh
+	EXPECTED_DATA_SOURCE=replay ./scripts/smoke.sh
 
+smoke-live:
+	EXPECTED_DATA_SOURCE=nexus_live ./scripts/smoke.sh

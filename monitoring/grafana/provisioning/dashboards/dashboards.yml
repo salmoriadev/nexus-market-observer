@@ -1,7 +1,7 @@
 apiVersion: 1
 
 providers:
-  - name: Nexus Market Intelligence
+  - name: Nexus Market Observer
     orgId: 1
     folder: Nexus
     type: file
@@ -10,4 +10,3 @@ providers:
     allowUiUpdates: false
     options:
       path: /var/lib/grafana/dashboards
-

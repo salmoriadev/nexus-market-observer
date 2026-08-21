@@ -8,6 +8,7 @@ RUN mkdir src \
     && rm -rf src
 
 COPY migrations ./migrations
+COPY fixtures ./fixtures
 COPY src ./src
 RUN touch src/main.rs \
     && cargo build --release --locked
@@ -15,7 +16,7 @@ RUN touch src/main.rs \
 FROM debian:bookworm-slim AS runtime
 
 WORKDIR /app
-COPY --from=builder /app/target/release/nexus-market-intelligence /usr/local/bin/nexus-market-intelligence
+COPY --from=builder /app/target/release/nexus-market-observer /usr/local/bin/nexus-market-observer
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder --chown=65534:65534 /app/migrations ./migrations
 
@@ -23,6 +24,6 @@ USER 65534:65534
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-    CMD ["/usr/local/bin/nexus-market-intelligence", "healthcheck"]
+    CMD ["/usr/local/bin/nexus-market-observer", "healthcheck"]
 
-ENTRYPOINT ["/usr/local/bin/nexus-market-intelligence"]
+ENTRYPOINT ["/usr/local/bin/nexus-market-observer"]
