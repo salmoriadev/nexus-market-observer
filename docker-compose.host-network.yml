@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      network: host
+    network_mode: host
+    ports: !reset []
+    networks: !reset []
+    extra_hosts:
+      - "postgres:host-gateway"
+
+  prometheus:
+    network_mode: host
+    ports: !reset []
+    networks: !reset []
+    extra_hosts:
+      - "backend:127.0.0.1"
+
+  grafana:
+    network_mode: host
+    ports: !reset []
+    networks: !reset []
+    environment:
+      GF_SERVER_HTTP_PORT: ${GRAFANA_PORT:-3000}
+    extra_hosts:
+      - "prometheus:127.0.0.1"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:${GRAFANA_PORT:-3000}/api/health || exit 1"]
