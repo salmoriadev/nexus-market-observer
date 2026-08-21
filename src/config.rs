@@ -33,6 +33,43 @@ pub enum NexusNetwork {
     Testnet,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketDataSourceMode {
+    Replay,
+    NexusLive,
+}
+
+impl MarketDataSourceMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Replay => "replay",
+            Self::NexusLive => "nexus_live",
+        }
+    }
+
+    pub const fn network_label(self) -> &'static str {
+        match self {
+            Self::Replay => "demo",
+            Self::NexusLive => "testnet",
+        }
+    }
+}
+
+impl FromStr for MarketDataSourceMode {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "replay" => Ok(Self::Replay),
+            "nexus_live" => Ok(Self::NexusLive),
+            _ => Err(ConfigError::InvalidValue {
+                name: "MARKET_DATA_SOURCE",
+                reason: "must be replay or nexus_live".to_string(),
+            }),
+        }
+    }
+}
+
 impl NexusNetwork {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -63,6 +100,7 @@ pub struct Config {
     pub http_host: IpAddr,
     pub http_port: u16,
     pub database_url: String,
+    pub market_data_source: MarketDataSourceMode,
     pub nexus_network: NexusNetwork,
     pub nexus_market: String,
     pub snapshot_interval: Duration,
@@ -85,12 +123,13 @@ impl Config {
             http_host: parse("HTTP_HOST", "0.0.0.0")?,
             http_port: parse("HTTP_PORT", "8080")?,
             database_url: required("DATABASE_URL")?,
+            market_data_source: value_or("MARKET_DATA_SOURCE", "replay").parse()?,
             nexus_network: value_or("NEXUS_NETWORK", "testnet").parse()?,
             nexus_market: value_or("NEXUS_MARKET", "BTC-USDX-PERP"),
             snapshot_interval,
             stale_after,
             rest_timeout,
-            rust_log: value_or("RUST_LOG", "info,nexus_market_intelligence=debug"),
+            rust_log: value_or("RUST_LOG", "info,nexus_market_observer=debug"),
         };
         config.validate()?;
         Ok(config)
@@ -104,6 +143,14 @@ impl Config {
             return Err(ConfigError::InvalidValue {
                 name: "NEXUS_MARKET",
                 reason: "must not be blank".to_string(),
+            });
+        }
+        if self.market_data_source == MarketDataSourceMode::Replay
+            && self.nexus_market != "BTC-USDX-PERP"
+        {
+            return Err(ConfigError::InvalidValue {
+                name: "NEXUS_MARKET",
+                reason: "replay mode only provides BTC-USDX-PERP".to_string(),
             });
         }
         if self.snapshot_interval.is_zero() {
@@ -138,6 +185,7 @@ impl Config {
             http_host: IpAddr::from([127, 0, 0, 1]),
             http_port: 0,
             database_url,
+            market_data_source: MarketDataSourceMode::Replay,
             nexus_network: NexusNetwork::Testnet,
             nexus_market: "BTC-USDX-PERP".to_string(),
             snapshot_interval: Duration::from_secs(5),
@@ -194,6 +242,26 @@ mod tests {
     fn stale_threshold_must_exceed_snapshot_interval() {
         let mut config = Config::test("postgres://localhost/test".to_string());
         config.stale_after = config.snapshot_interval;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_only_explicit_market_data_sources() {
+        assert_eq!(
+            "replay".parse::<MarketDataSourceMode>().expect("replay"),
+            MarketDataSourceMode::Replay
+        );
+        assert_eq!(
+            "nexus_live".parse::<MarketDataSourceMode>().expect("live"),
+            MarketDataSourceMode::NexusLive
+        );
+        assert!("demo".parse::<MarketDataSourceMode>().is_err());
+    }
+
+    #[test]
+    fn replay_rejects_an_unknown_fixture_market() {
+        let mut config = Config::test("postgres://localhost/test".to_string());
+        config.nexus_market = "ETH-USDX-PERP".to_string();
         assert!(config.validate().is_err());
     }
 }

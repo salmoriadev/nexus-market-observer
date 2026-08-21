@@ -7,13 +7,11 @@ use async_trait::async_trait;
 use axum::body::Body;
 use chrono::{TimeDelta, Utc};
 use http_body_util::BodyExt;
-use nexus_market_intelligence::api::{router, AppContext};
-use nexus_market_intelligence::config::{AppEnvironment, Config, NexusNetwork};
-use nexus_market_intelligence::error::AppError;
-use nexus_market_intelligence::persistence::{HistoryPoint, HistoryReader};
-use nexus_market_intelligence::state::{
-    CatalogMarket, MarketState, NexusConnection, ServiceStatus,
-};
+use nexus_market_observer::api::{router, AppContext};
+use nexus_market_observer::config::{AppEnvironment, Config, MarketDataSourceMode, NexusNetwork};
+use nexus_market_observer::error::AppError;
+use nexus_market_observer::persistence::{HistoryPoint, HistoryReader};
+use nexus_market_observer::state::{CatalogMarket, MarketState, ServiceStatus, SourceConnection};
 use rust_decimal_macros::dec;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -26,7 +24,12 @@ struct FakeHistoryReader {
 
 #[async_trait]
 impl HistoryReader for FakeHistoryReader {
-    async fn history(&self, _symbol: &str, limit: i64) -> Result<Vec<HistoryPoint>, AppError> {
+    async fn history(
+        &self,
+        _symbol: &str,
+        _data_source: &str,
+        limit: i64,
+    ) -> Result<Vec<HistoryPoint>, AppError> {
         if let Ok(mut observed) = self.observed_limit.lock() {
             *observed = Some(limit);
         }
@@ -34,12 +37,13 @@ impl HistoryReader for FakeHistoryReader {
     }
 }
 
-fn test_config() -> Arc<Config> {
+fn test_config_with_source(market_data_source: MarketDataSourceMode) -> Arc<Config> {
     Arc::new(Config {
         app_env: AppEnvironment::Test,
         http_host: IpAddr::from([127, 0, 0, 1]),
         http_port: 0,
         database_url: "postgres://unused".to_string(),
+        market_data_source,
         nexus_network: NexusNetwork::Testnet,
         nexus_market: "BTC-USDX-PERP".to_string(),
         snapshot_interval: Duration::from_secs(5),
@@ -49,14 +53,18 @@ fn test_config() -> Arc<Config> {
     })
 }
 
+fn test_config() -> Arc<Config> {
+    test_config_with_source(MarketDataSourceMode::Replay)
+}
+
 fn populated_state(status: ServiceStatus) -> MarketState {
     let now = Utc::now();
     let mut state = MarketState::new("BTC-USDX-PERP".to_string());
     state.service_status = status;
-    state.nexus_connection = if status == ServiceStatus::Healthy {
-        NexusConnection::Connected
+    state.source_connection = if status == ServiceStatus::Healthy {
+        SourceConnection::Connected
     } else {
-        NexusConnection::Reconnecting
+        SourceConnection::Reconnecting
     };
     state.best_bid = Some(dec!(117231.20));
     state.best_ask = Some(dec!(117235.60));
@@ -82,6 +90,14 @@ fn populated_state(status: ServiceStatus) -> MarketState {
 }
 
 fn app(status: ServiceStatus, database_connected: bool) -> axum::Router {
+    app_with_source(status, database_connected, MarketDataSourceMode::Replay)
+}
+
+fn app_with_source(
+    status: ServiceStatus,
+    database_connected: bool,
+    source: MarketDataSourceMode,
+) -> axum::Router {
     let history = FakeHistoryReader {
         rows: vec![HistoryPoint {
             best_bid: dec!(117231.20),
@@ -94,12 +110,29 @@ fn app(status: ServiceStatus, database_connected: bool) -> axum::Router {
         observed_limit: Mutex::new(None),
     };
     router(AppContext {
-        config: test_config(),
+        config: test_config_with_source(source),
         market_state: Arc::new(tokio::sync::RwLock::new(populated_state(status))),
         history_reader: Arc::new(history),
         database_connected: Arc::new(AtomicBool::new(database_connected)),
         started_at: Instant::now(),
-        prometheus: nexus_market_intelligence::telemetry::isolated_metrics_handle(),
+        prometheus: nexus_market_observer::telemetry::isolated_metrics_handle(),
+    })
+}
+
+fn empty_app() -> axum::Router {
+    let history = FakeHistoryReader {
+        rows: Vec::new(),
+        observed_limit: Mutex::new(None),
+    };
+    router(AppContext {
+        config: test_config(),
+        market_state: Arc::new(tokio::sync::RwLock::new(MarketState::new(
+            "BTC-USDX-PERP".to_string(),
+        ))),
+        history_reader: Arc::new(history),
+        database_connected: Arc::new(AtomicBool::new(true)),
+        started_at: Instant::now(),
+        prometheus: nexus_market_observer::telemetry::isolated_metrics_handle(),
     })
 }
 
@@ -129,8 +162,32 @@ async fn health_is_healthy_with_a_current_snapshot() {
     let (status, body) = response_json(app(ServiceStatus::Healthy, true), "/health").await;
     assert_eq!(status, 200);
     assert_eq!(body["status"], "healthy");
-    assert_eq!(body["nexus"]["connection"], "connected");
+    assert_eq!(body["data_source"]["mode"], "replay");
+    assert_eq!(body["data_source"]["network"], "demo");
+    assert_eq!(body["market_data"]["connection"], "connected");
     assert_eq!(body["database"]["status"], "connected");
+}
+
+#[tokio::test]
+async fn health_is_unavailable_before_the_first_snapshot() {
+    let (status, body) = response_json(empty_app(), "/health").await;
+    assert_eq!(status, 503);
+    assert_eq!(body["status"], "starting");
+    assert_eq!(body["data_source"]["mode"], "replay");
+}
+
+#[tokio::test]
+async fn live_health_is_explicitly_labeled_as_testnet() {
+    let application = app_with_source(
+        ServiceStatus::Degraded,
+        true,
+        MarketDataSourceMode::NexusLive,
+    );
+    let (status, body) = response_json(application, "/health").await;
+    assert_eq!(status, 200);
+    assert_eq!(body["status"], "degraded");
+    assert_eq!(body["data_source"]["mode"], "nexus_live");
+    assert_eq!(body["data_source"]["network"], "testnet");
 }
 
 #[tokio::test]
@@ -148,6 +205,7 @@ async fn current_market_serializes_decimals_as_strings() {
         response_json(app(ServiceStatus::Healthy, true), "/markets/BTC-USDX-PERP").await;
     assert_eq!(status, 200);
     assert_eq!(body["best_bid"], json!("117231.20"));
+    assert_eq!(body["data_source"], "replay");
     assert_eq!(body["mid_price"], json!("117233.40"));
     assert_eq!(body["imbalance"], json!("0.1792"));
 }
@@ -170,6 +228,7 @@ async fn history_returns_decimal_strings() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(body["count"], 1);
+    assert_eq!(body["data_source"], "replay");
     assert_eq!(body["data"][0]["best_bid"], "117231.20");
     assert_eq!(body["data"][0]["imbalance"], "0.1792");
 }
@@ -192,6 +251,7 @@ async fn markets_lists_the_tracked_catalog_entry() {
     let (status, body) = response_json(app(ServiceStatus::Healthy, true), "/markets").await;
     assert_eq!(status, 200);
     assert_eq!(body["count"], 1);
+    assert_eq!(body["data_source"], "replay");
     assert_eq!(body["data"][0]["tracked"], true);
 }
 

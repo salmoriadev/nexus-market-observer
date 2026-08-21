@@ -11,8 +11,8 @@ use crate::error::AppError;
 use crate::state::ServiceStatus;
 
 use super::models::{
-    DatabaseHealth, HealthResponse, HistoryItem, HistoryResponse, MarketCatalogItem,
-    MarketResponse, MarketsResponse, NexusHealth,
+    DataSourceResponse, DatabaseHealth, HealthResponse, HistoryItem, HistoryResponse,
+    MarketCatalogItem, MarketDataHealth, MarketResponse, MarketsResponse,
 };
 use super::AppContext;
 
@@ -38,12 +38,15 @@ pub async fn health(State(context): State<AppContext>) -> Response {
     };
     let body = HealthResponse {
         status: overall_status.to_string(),
-        service: "nexus-market-intelligence",
+        service: "nexus-market-observer",
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: context.started_at.elapsed().as_secs(),
-        nexus: NexusHealth {
-            network: context.config.nexus_network.as_str(),
-            connection: state.nexus_connection.as_str(),
+        data_source: DataSourceResponse {
+            mode: context.config.market_data_source.as_str(),
+            network: context.config.market_data_source.network_label(),
+        },
+        market_data: MarketDataHealth {
+            connection: state.source_connection.as_str(),
             market: context.config.nexus_market.clone(),
             last_update_at: state.last_update_at.map(|value| value.to_rfc3339()),
             last_update_age_ms: age
@@ -85,6 +88,7 @@ pub async fn markets(
         .collect();
     let count = data.len();
     Json(MarketsResponse {
+        data_source: context.config.market_data_source.as_str(),
         data,
         count,
         catalog_updated_at: state.catalog_updated_at.map(|value| value.to_rfc3339()),
@@ -100,6 +104,7 @@ pub async fn market(
     }
     let state = context.market_state.read().await;
     let response = MarketResponse {
+        data_source: context.config.market_data_source.as_str(),
         symbol: state.symbol.clone(),
         status: state.service_status.to_string(),
         best_bid: state
@@ -158,7 +163,11 @@ pub async fn market_history(
     }
 
     let limit = parse_history_limit(query.limit.as_deref())?;
-    let rows = context.history_reader.history(&symbol, limit).await?;
+    let data_source = context.config.market_data_source.as_str();
+    let rows = context
+        .history_reader
+        .history(&symbol, data_source, limit)
+        .await?;
     let data: Vec<_> = rows
         .into_iter()
         .map(|row| HistoryItem {
@@ -172,6 +181,7 @@ pub async fn market_history(
         .collect();
     let count = data.len();
     Ok(Json(HistoryResponse {
+        data_source,
         symbol,
         data,
         count,

@@ -1,9 +1,7 @@
 use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
-use nexus_market_intelligence::persistence::{
-    HistoryReader, PersistableSnapshot, PostgresRepository,
-};
+use nexus_market_observer::persistence::{HistoryReader, PersistableSnapshot, PostgresRepository};
 use rust_decimal_macros::dec;
 use sqlx::postgres::PgPoolOptions;
 
@@ -30,6 +28,7 @@ async fn postgres_migrations_persistence_history_limit_null_and_precision() {
         .expect("market upsert");
     let now = Utc::now();
     let first = PersistableSnapshot {
+        data_source: "replay".to_string(),
         market_id: market.clone(),
         symbol: market.clone(),
         best_bid: dec!(117231.20000001),
@@ -62,18 +61,42 @@ async fn postgres_migrations_persistence_history_limit_null_and_precision() {
         .expect("second snapshot");
 
     let latest = repository
-        .history(&market, 1)
+        .history(&market, "replay", 1)
         .await
         .expect("limited history");
     assert_eq!(latest.len(), 1);
     assert_eq!(latest[0].best_bid, dec!(117232.20000001));
     assert_eq!(latest[0].imbalance, Some(dec!(-0.12345678)));
 
-    let history = repository.history(&market, 10).await.expect("full history");
+    let history = repository
+        .history(&market, "replay", 10)
+        .await
+        .expect("full history");
     assert_eq!(history.len(), 2);
     assert!(history[0].captured_at >= history[1].captured_at);
     assert_eq!(history[1].best_bid, dec!(117231.20000001));
     assert_eq!(history[1].imbalance, None);
+
+    let live = PersistableSnapshot {
+        data_source: "nexus_live".to_string(),
+        source_nonce: Some(3),
+        source_updated_at: now + TimeDelta::seconds(1),
+        ..first.clone()
+    };
+    repository
+        .persist_snapshot(&live)
+        .await
+        .expect("live snapshot");
+    let replay_only = repository
+        .history(&market, "replay", 10)
+        .await
+        .expect("source-filtered history");
+    let live_only = repository
+        .history(&market, "nexus_live", 10)
+        .await
+        .expect("source-filtered history");
+    assert_eq!(replay_only.len(), 2);
+    assert_eq!(live_only.len(), 1);
 
     sqlx::query("DELETE FROM market_snapshots WHERE market_id = $1")
         .bind(&market)

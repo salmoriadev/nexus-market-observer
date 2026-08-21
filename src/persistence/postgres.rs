@@ -53,14 +53,15 @@ impl PostgresRepository {
         sqlx::query(
             r#"
             INSERT INTO market_snapshots (
-                market_id, best_bid, best_ask, mid_price, spread, spread_bps,
+                market_id, data_source, best_bid, best_ask, mid_price, spread, spread_bps,
                 bid_depth, ask_depth, imbalance, depth_levels, source_nonce,
                 source_updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             "#,
         )
         .bind(&snapshot.market_id)
+        .bind(&snapshot.data_source)
         .bind(snapshot.best_bid)
         .bind(snapshot.best_ask)
         .bind(snapshot.mid_price)
@@ -84,7 +85,12 @@ impl PostgresRepository {
 
 #[async_trait]
 impl HistoryReader for PostgresRepository {
-    async fn history(&self, symbol: &str, limit: i64) -> Result<Vec<HistoryPoint>, AppError> {
+    async fn history(
+        &self,
+        symbol: &str,
+        data_source: &str,
+        limit: i64,
+    ) -> Result<Vec<HistoryPoint>, AppError> {
         let rows = sqlx::query_as::<_, HistoryPoint>(
             r#"
             SELECT
@@ -96,12 +102,13 @@ impl HistoryReader for PostgresRepository {
                 snapshot.captured_at
             FROM market_snapshots AS snapshot
             INNER JOIN markets AS market ON market.id = snapshot.market_id
-            WHERE market.symbol = $1
+            WHERE market.symbol = $1 AND snapshot.data_source = $2
             ORDER BY snapshot.captured_at DESC
-            LIMIT $2
+            LIMIT $3
             "#,
         )
         .bind(symbol)
+        .bind(data_source)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;

@@ -9,12 +9,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::analytics::calculate;
 use crate::error::{AppError, DomainError};
-use crate::state::{NexusConnection, ServiceStatus, SharedMarketState};
+use crate::state::{ServiceStatus, SharedMarketState, SourceConnection};
 use crate::telemetry;
 
 use super::adapter::NexusAdapter;
 
 const ANALYTICS_DEPTH_LEVELS: usize = 10;
+const SOURCE: &str = "nexus_live";
 const WS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const WS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(500);
 pub const REST_REFRESH_FALLBACK_REASON: &str =
@@ -129,7 +130,7 @@ fn classify_message(value: Value, tracked_market: &str) -> Result<CollectorEvent
     }
 }
 
-pub async fn run_collector(
+pub async fn run_nexus_collector(
     adapter: NexusAdapter,
     state: SharedMarketState,
     market: String,
@@ -139,7 +140,7 @@ pub async fn run_collector(
     {
         let mut current = state.write().await;
         let _ = current.transition_to(ServiceStatus::Connecting);
-        current.nexus_connection = NexusConnection::Connecting;
+        current.source_connection = SourceConnection::Connecting;
     }
 
     if let Err(error) = perform_resync(&adapter, &state, &market, false).await {
@@ -175,21 +176,21 @@ pub async fn run_collector(
                 let Some(event) = event else {
                     subscription = None;
                     ws_connected = false;
-                    metrics::gauge!("nexus_ws_connected").set(0.0);
+                    metrics::gauge!("nexus_ws_connected", "source" => SOURCE).set(0.0);
                     mark_degraded(&state, REST_REFRESH_FALLBACK_REASON.to_string()).await;
                     continue;
                 };
                 match classify_sdk_event(event, &market) {
                     Ok(CollectorEvent::Connected) => {
                         if has_connected_once {
-                            metrics::counter!("nexus_ws_reconnects_total").increment(1);
+                            metrics::counter!("nexus_ws_reconnects_total", "source" => SOURCE).increment(1);
                         }
                         has_connected_once = true;
                         ws_connected = true;
-                        metrics::gauge!("nexus_ws_connected").set(1.0);
+                        metrics::gauge!("nexus_ws_connected", "source" => SOURCE).set(1.0);
                         {
                             let mut current = state.write().await;
-                            current.nexus_connection = NexusConnection::Connected;
+                            current.source_connection = SourceConnection::Connected;
                             let _ = current.transition_to(ServiceStatus::Resyncing);
                         }
                         tracing::info!(market, "connected to Nexus WebSocket; resynchronizing");
@@ -199,19 +200,19 @@ pub async fn run_collector(
                     }
                     Ok(CollectorEvent::Disconnected(reason)) => {
                         ws_connected = false;
-                        metrics::gauge!("nexus_ws_connected").set(0.0);
+                        metrics::gauge!("nexus_ws_connected", "source" => SOURCE).set(0.0);
                         {
                             let mut current = state.write().await;
                             if current.service_status != ServiceStatus::ShuttingDown {
                                 current.service_status = ServiceStatus::Reconnecting;
-                                current.nexus_connection = NexusConnection::Reconnecting;
+                                current.source_connection = SourceConnection::Reconnecting;
                                 current.last_error = Some("Nexus WebSocket disconnected".to_string());
                             }
                         }
                         tracing::warn!(market, reason, "Nexus WebSocket disconnected; SDK will reconnect when an endpoint is available");
                     }
                     Ok(CollectorEvent::Lagged { dropped }) => {
-                        metrics::counter!("nexus_ws_lagged_frames_total").increment(dropped);
+                        metrics::counter!("nexus_ws_lagged_frames_total", "source" => SOURCE).increment(dropped);
                         mark_stale(&state, "Nexus WebSocket consumer dropped frames").await;
                         if let Err(error) = perform_resync(&adapter, &state, &market, ws_connected).await {
                             mark_degraded(&state, error.to_string()).await;
@@ -226,7 +227,7 @@ pub async fn run_collector(
                     Ok(CollectorEvent::BookUpdate { sequence }) => {
                         let gap = update_stream_sequence_and_detect_gap(&state, sequence).await;
                         if gap {
-                            metrics::counter!("nexus_ws_lagged_frames_total").increment(1);
+                            metrics::counter!("nexus_ws_lagged_frames_total", "source" => SOURCE).increment(1);
                             mark_stale(&state, "Nexus WebSocket sequence gap detected").await;
                         }
                         if gap || last_ws_refresh.elapsed() >= WS_REFRESH_DEBOUNCE {
@@ -237,7 +238,7 @@ pub async fn run_collector(
                         }
                     }
                     Ok(CollectorEvent::OutOfSync) => {
-                        metrics::counter!("nexus_ws_lagged_frames_total").increment(1);
+                        metrics::counter!("nexus_ws_lagged_frames_total", "source" => SOURCE).increment(1);
                         mark_stale(&state, "Nexus WebSocket reported out_of_sync").await;
                         if let Err(error) = perform_resync(&adapter, &state, &market, ws_connected).await {
                             mark_degraded(&state, error.to_string()).await;
@@ -260,7 +261,7 @@ pub async fn run_collector(
     if let Some(subscription) = subscription {
         subscription.close().await;
     }
-    metrics::gauge!("nexus_ws_connected").set(0.0);
+    metrics::gauge!("nexus_ws_connected", "source" => SOURCE).set(0.0);
     tracing::info!(market, "Nexus collector stopped");
 }
 
@@ -321,10 +322,10 @@ async fn perform_resync(
         if current.service_status == ServiceStatus::ShuttingDown {
             return Ok(());
         }
-        current.nexus_connection = if connected {
-            NexusConnection::Connected
+        current.source_connection = if connected {
+            SourceConnection::Connected
         } else {
-            NexusConnection::Disconnected
+            SourceConnection::Disconnected
         };
         current.last_error = if connected {
             None
@@ -341,14 +342,16 @@ async fn perform_resync(
         );
     }
 
-    metrics::counter!("nexus_resyncs_total", "market" => market.to_string()).increment(1);
+    metrics::counter!("nexus_resyncs_total", "market" => market.to_string(), "source" => SOURCE)
+        .increment(1);
     telemetry::record_market_update(
         market,
+        SOURCE,
         metrics_snapshot.mid_price,
         metrics_snapshot.spread_bps,
         metrics_snapshot.imbalance,
     );
-    telemetry::record_market_age(market, Duration::ZERO);
+    telemetry::record_market_age(market, SOURCE, Duration::ZERO);
     tracing::debug!(
         market,
         nonce = snapshot.nonce,
@@ -390,6 +393,7 @@ async fn update_stream_sequence_and_detect_gap(state: &SharedMarketState, sequen
 pub async fn run_stale_detector(
     state: SharedMarketState,
     stale_after: Duration,
+    source: &'static str,
     cancellation: CancellationToken,
 ) {
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
@@ -411,7 +415,7 @@ pub async fn run_stale_detector(
                     (current.symbol.clone(), age, became_stale)
                 };
                 if let Some(age) = age {
-                    telemetry::record_market_age(&market, age);
+                    telemetry::record_market_age(&market, source, age);
                 }
                 if became_stale {
                     tracing::warn!(market, "market data exceeded the stale threshold");

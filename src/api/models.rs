@@ -6,14 +6,20 @@ pub struct HealthResponse {
     pub service: &'static str,
     pub version: &'static str,
     pub uptime_seconds: u64,
-    pub nexus: NexusHealth,
+    pub data_source: DataSourceResponse,
+    pub market_data: MarketDataHealth,
     pub database: DatabaseHealth,
     pub last_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct NexusHealth {
+pub struct DataSourceResponse {
+    pub mode: &'static str,
     pub network: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketDataHealth {
     pub connection: &'static str,
     pub market: String,
     pub last_update_at: Option<String>,
@@ -29,6 +35,7 @@ pub struct DatabaseHealth {
 
 #[derive(Debug, Serialize)]
 pub struct MarketsResponse<T> {
+    pub data_source: &'static str,
     pub data: Vec<T>,
     pub count: usize,
     pub catalog_updated_at: Option<String>,
@@ -45,6 +52,7 @@ pub struct MarketCatalogItem {
 
 #[derive(Debug, Serialize)]
 pub struct MarketResponse {
+    pub data_source: &'static str,
     pub symbol: String,
     pub status: String,
     pub best_bid: String,
@@ -62,6 +70,7 @@ pub struct MarketResponse {
 
 #[derive(Debug, Serialize)]
 pub struct HistoryResponse {
+    pub data_source: &'static str,
     pub symbol: String,
     pub data: Vec<HistoryItem>,
     pub count: usize,

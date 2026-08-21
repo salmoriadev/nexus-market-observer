@@ -26,11 +26,17 @@ pub struct HistoryPoint {
 
 #[async_trait]
 pub trait HistoryReader: Send + Sync {
-    async fn history(&self, symbol: &str, limit: i64) -> Result<Vec<HistoryPoint>, AppError>;
+    async fn history(
+        &self,
+        symbol: &str,
+        data_source: &str,
+        limit: i64,
+    ) -> Result<Vec<HistoryPoint>, AppError>;
 }
 
 #[derive(Debug, Clone)]
 pub struct PersistableSnapshot {
+    pub data_source: String,
     pub market_id: String,
     pub symbol: String,
     pub best_bid: Decimal,
@@ -51,6 +57,7 @@ pub async fn run_persistence_worker(
     state: SharedMarketState,
     database_connected: Arc<AtomicBool>,
     interval: Duration,
+    data_source: &'static str,
     cancellation: CancellationToken,
 ) {
     let mut ticker = tokio::time::interval(interval);
@@ -64,7 +71,7 @@ pub async fn run_persistence_worker(
                 break;
             }
             _ = ticker.tick() => {
-                let snapshot = snapshot_for_persistence(&state, last_persisted_update).await;
+                let snapshot = snapshot_for_persistence(&state, last_persisted_update, data_source).await;
                 if let Some(snapshot) = snapshot {
                     let update_time = snapshot.source_updated_at;
                     match repository.persist_snapshot(&snapshot).await {
@@ -73,7 +80,7 @@ pub async fn run_persistence_worker(
                                 tracing::info!("PostgreSQL persistence recovered");
                             }
                             last_persisted_update = Some(update_time);
-                            metrics::counter!("nexus_snapshots_persisted_total", "market" => snapshot.symbol).increment(1);
+                            metrics::counter!("nexus_snapshots_persisted_total", "market" => snapshot.symbol, "source" => data_source).increment(1);
                         }
                         Err(error) => {
                             database_connected.store(false, Ordering::Relaxed);
@@ -103,6 +110,7 @@ pub async fn run_persistence_worker(
 async fn snapshot_for_persistence(
     state: &SharedMarketState,
     last_persisted_update: Option<DateTime<Utc>>,
+    data_source: &str,
 ) -> Option<PersistableSnapshot> {
     let state = state.read().await;
     let source_updated_at = state.last_update_at?;
@@ -111,6 +119,7 @@ async fn snapshot_for_persistence(
     }
 
     Some(PersistableSnapshot {
+        data_source: data_source.to_string(),
         market_id: state.market_id.clone(),
         symbol: state.symbol.clone(),
         best_bid: state.best_bid?,

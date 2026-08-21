@@ -1,9 +1,9 @@
 [package]
-name = "nexus-market-intelligence"
+name = "nexus-market-observer"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Reliable Rust service for streaming, analyzing, persisting, and observing Nexus Exchange market data."
+description = "Fault-tolerant Rust service for ingesting, analyzing, persisting, and observing Nexus Exchange market data."
 license = "MIT"
 
 [dependencies]

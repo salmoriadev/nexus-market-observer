@@ -1470,7 +1470,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nexus-market-intelligence"
+name = "nexus-market-observer"
 version = "0.1.0"
 dependencies = [
  "async-trait",

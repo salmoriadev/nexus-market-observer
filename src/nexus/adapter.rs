@@ -40,7 +40,7 @@ impl NexusAdapter {
         let sdk_config = SdkConfig::new(Network::Testnet)
             .with_timeout(operation_timeout)
             .with_user_agent(format!(
-                "nexus-market-intelligence/{}",
+                "nexus-market-observer/{}",
                 env!("CARGO_PKG_VERSION")
             ));
         Self {

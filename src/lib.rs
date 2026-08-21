@@ -7,5 +7,6 @@ pub mod config;
 pub mod error;
 pub mod nexus;
 pub mod persistence;
+pub mod replay;
 pub mod state;
 pub mod telemetry;

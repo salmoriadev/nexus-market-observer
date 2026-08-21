@@ -9,10 +9,11 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::{self, AppContext};
-use crate::config::Config;
+use crate::config::{Config, MarketDataSourceMode};
 use crate::error::AppError;
-use crate::nexus::{run_collector, run_stale_detector, NexusAdapter};
+use crate::nexus::{run_nexus_collector, run_stale_detector, NexusAdapter};
 use crate::persistence::{connect_with_retry, run_persistence_worker, PostgresRepository};
+use crate::replay::{run_replay_collector, ReplaySource};
 use crate::state::{MarketState, ServiceStatus, SharedMarketState};
 
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -20,9 +21,10 @@ const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 pub async fn run(config: Config) -> Result<(), AppError> {
     let prometheus = crate::telemetry::init_metrics().map_err(AppError::Task)?;
     tracing::info!(
-        service = "nexus-market-intelligence",
+        service = "nexus-market-observer",
         version = env!("CARGO_PKG_VERSION"),
-        network = config.nexus_network.as_str(),
+        data_source = config.market_data_source.as_str(),
+        network = config.market_data_source.network_label(),
         market = config.nexus_market,
         "starting service"
     );
@@ -38,25 +40,42 @@ pub async fn run(config: Config) -> Result<(), AppError> {
     )));
     let database_connected = Arc::new(AtomicBool::new(true));
     let cancellation = CancellationToken::new();
-    let adapter = NexusAdapter::testnet(config.rest_timeout);
+    let listener = tokio::net::TcpListener::bind(config.socket_addr()).await?;
+    tracing::info!(address = %config.socket_addr(), "HTTP server listening");
 
-    let collector = tokio::spawn(run_collector(
-        adapter,
-        Arc::clone(&market_state),
-        config.nexus_market.clone(),
-        config.snapshot_interval,
-        cancellation.clone(),
-    ));
+    let collector = match config.market_data_source {
+        MarketDataSourceMode::Replay => {
+            let source = ReplaySource::bundled()?;
+            tokio::spawn(run_replay_collector(
+                source,
+                Arc::clone(&market_state),
+                config.nexus_market.clone(),
+                cancellation.clone(),
+            ))
+        }
+        MarketDataSourceMode::NexusLive => {
+            let adapter = NexusAdapter::testnet(config.rest_timeout);
+            tokio::spawn(run_nexus_collector(
+                adapter,
+                Arc::clone(&market_state),
+                config.nexus_market.clone(),
+                config.snapshot_interval,
+                cancellation.clone(),
+            ))
+        }
+    };
     let persistence = tokio::spawn(run_persistence_worker(
         repository.clone(),
         Arc::clone(&market_state),
         Arc::clone(&database_connected),
         config.snapshot_interval,
+        config.market_data_source.as_str(),
         cancellation.clone(),
     ));
     let stale_detector = tokio::spawn(run_stale_detector(
         Arc::clone(&market_state),
         config.stale_after,
+        config.market_data_source.as_str(),
         cancellation.clone(),
     ));
 
@@ -68,9 +87,6 @@ pub async fn run(config: Config) -> Result<(), AppError> {
         started_at: Instant::now(),
         prometheus,
     };
-    let listener = tokio::net::TcpListener::bind(config.socket_addr()).await?;
-    tracing::info!(address = %config.socket_addr(), "HTTP server listening");
-
     let shutdown_state = Arc::clone(&market_state);
     let shutdown_token = cancellation.clone();
     let server = axum::serve(listener, api::router(context)).with_graceful_shutdown(async move {
@@ -88,19 +104,23 @@ pub async fn run(config: Config) -> Result<(), AppError> {
         shutdown_token.cancel();
     });
 
-    if let Err(error) = server.await {
+    let server_error = server.await.err().map(|error| error.to_string());
+    if let Some(error) = &server_error {
         cancellation.cancel();
-        tracing::error!(error = %error, "HTTP server failed");
+        tracing::error!(error, "HTTP server failed");
     }
 
     cancellation.cancel();
     mark_shutting_down(&market_state).await;
-    await_worker("Nexus collector", collector).await;
+    await_worker("market data collector", collector).await;
     await_worker("snapshot persistence", persistence).await;
     await_worker("stale detector", stale_detector).await;
     pool.close().await;
     tracing::info!("service shutdown completed");
-    Ok(())
+    match server_error {
+        Some(error) => Err(AppError::Task(format!("HTTP server failed: {error}"))),
+        None => Ok(()),
+    }
 }
 
 async fn mark_shutting_down(state: &SharedMarketState) {

@@ -95,14 +95,14 @@ impl std::fmt::Display for ServiceStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NexusConnection {
+pub enum SourceConnection {
     Disconnected,
     Connecting,
     Connected,
     Reconnecting,
 }
 
-impl NexusConnection {
+impl SourceConnection {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Disconnected => "disconnected",
@@ -125,7 +125,7 @@ pub struct CatalogMarket {
 #[derive(Debug, Clone)]
 pub struct MarketState {
     pub service_status: ServiceStatus,
-    pub nexus_connection: NexusConnection,
+    pub source_connection: SourceConnection,
     pub market_id: String,
     pub symbol: String,
     pub bids: Vec<BookLevel>,
@@ -152,7 +152,7 @@ impl MarketState {
     pub fn new(symbol: String) -> Self {
         Self {
             service_status: ServiceStatus::Starting,
-            nexus_connection: NexusConnection::Disconnected,
+            source_connection: SourceConnection::Disconnected,
             market_id: symbol.clone(),
             symbol,
             bids: Vec::new(),
@@ -196,6 +196,21 @@ impl MarketState {
         updated_at: DateTime<Utc>,
         connected: bool,
     ) {
+        self.apply_update(bids, asks, analytics, nonce, updated_at, connected);
+        if self.service_status != ServiceStatus::ShuttingDown {
+            self.last_resync_at = Some(Utc::now());
+        }
+    }
+
+    pub fn apply_update(
+        &mut self,
+        bids: Vec<BookLevel>,
+        asks: Vec<BookLevel>,
+        analytics: BookAnalytics,
+        nonce: i64,
+        updated_at: DateTime<Utc>,
+        connected: bool,
+    ) {
         if self.service_status == ServiceStatus::ShuttingDown {
             return;
         }
@@ -212,7 +227,6 @@ impl MarketState {
         self.depth_levels = analytics.depth_levels;
         self.source_nonce_or_sequence = Some(nonce);
         self.last_update_at = Some(updated_at);
-        self.last_resync_at = Some(Utc::now());
         self.service_status = if connected {
             ServiceStatus::Healthy
         } else {
