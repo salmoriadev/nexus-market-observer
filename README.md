@@ -12,6 +12,8 @@ This is an independent portfolio and training project. It is **unofficial, not a
 
 The deterministic demo is the recommended first experience. It exercises the complete pipeline even when the public Nexus Exchange Testnet is unavailable.
 
+Requirements: Docker with Compose, `curl`, and `jq`.
+
 ```bash
 cp .env.example .env
 make demo
@@ -25,6 +27,12 @@ Open:
 - Grafana: <http://localhost:3000> (`admin` / `admin` by default)
 
 Stop the demo with `make down`.
+
+The supplied Compose topology is for local development and portfolio evaluation, not production deployment. Published ports bind to `127.0.0.1`, and the example PostgreSQL/Grafana credentials are intentionally non-secret local defaults.
+
+![Provisioned Grafana dashboard running the deterministic replay pipeline](docs/grafana-dashboard.png)
+
+The screenshot is a real capture of the provisioned dashboard in replay mode; its legend and health API identify the source as demo data.
 
 ## Overview
 
@@ -80,7 +88,7 @@ One crate produces one service. Collection, persistence, stale detection, and HT
 - `Starting`, `Connecting`, `Resyncing`, `Healthy`, `Stale`, `Reconnecting`, `Degraded`, and `ShuttingDown` states.
 - Best bid/ask, midpoint, spread, spread bps, top-ten depth, and order-book imbalance.
 - `rust_decimal::Decimal` through the financial domain, PostgreSQL `NUMERIC`, and JSON strings.
-- Periodic duplicate-resistant persistence and newest-first bounded history.
+- Periodic persistence with durable source-update deduplication and newest-first bounded history.
 - Database failure recovery, stale detection, Prometheus metrics, Grafana, Docker Compose, CI, and coordinated shutdown.
 
 ## Technology stack
@@ -93,7 +101,7 @@ One crate produces one service. Collection, persistence, stale detection, and HT
 
 ### Verified Nexus contract
 
-The integration was inspected on 2026-08-20 against the official [nexus-xyz organization](https://github.com/nexus-xyz), [`nexus-exchange-rs`](https://github.com/nexus-xyz/nexus-exchange-rs), and [`nexus-exchange-api`](https://github.com/nexus-xyz/nexus-exchange-api):
+The integration was inspected on 2026-08-20 and manually revalidated on 2026-08-21 against the official [nexus-xyz organization](https://github.com/nexus-xyz), [`nexus-exchange-rs` revision `0e797a3`](https://github.com/nexus-xyz/nexus-exchange-rs/tree/0e797a3984e8886e1cf5ab018c2c3589681813c7), and [`nexus-exchange-api` revision `19f8081`](https://github.com/nexus-xyz/nexus-exchange-api/tree/19f808110f80027009b43fbc0768702a7315a658):
 
 - SDK release commit: `0e797a3984e8886e1cf5ab018c2c3589681813c7`.
 - API revision: `19f808110f80027009b43fbc0768702a7315a658`; OpenAPI version `0.8.1`.
@@ -101,6 +109,7 @@ The integration was inspected on 2026-08-20 against the official [nexus-xyz orga
 - Public channel name `book`; envelopes include `subscribed`, `event`, and `out_of_sync` with stream sequences.
 - The payload is opaque and may represent snapshots or deltas, so the live adapter uses valid events as change notifications and performs a debounced REST refresh rather than inventing a reconstruction algorithm.
 - SDK 0.9.1 reports no usable Testnet WebSocket origin (`ENG-3398`). Live mode retries the SDK subscription and uses rate-limited REST refresh while exposing degraded connection health.
+- The legacy Testnet REST market endpoints returned a real four-market catalog and `BTC-USDX-PERP` snapshots without credentials during the 2026-08-21 manual check. The newer per-network hosts are documented upstream but were still pending DNS/TLS rollout at the pinned revision, so live availability remains an external condition rather than a CI guarantee.
 
 ## Running the live integration
 
@@ -126,7 +135,8 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.host-network.yml make live
 |---|---|---|
 | `APP_ENV` | `development` | `development`, `production`, or `test`; production logs JSON |
 | `HTTP_HOST` | `0.0.0.0` | Valid IP address |
-| `HTTP_PORT` | `8080` | Valid TCP port |
+| `HTTP_PORT` | `8080` | Native process port, range 1–65535; Compose fixes the internal contract at 8080 |
+| `BACKEND_PORT` | `8080` | Localhost port published by Compose |
 | `DATABASE_URL` | `postgres://nexus:nexus@postgres:5432/nexus_market` | Required |
 | `MARKET_DATA_SOURCE` | `replay` | `replay` or `nexus_live` |
 | `NEXUS_NETWORK` | `testnet` | Only `testnet`; mainnet fails startup |
@@ -139,7 +149,7 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.host-network.yml make live
 | `GRAFANA_ADMIN_PASSWORD` | `admin` | Change outside local development |
 | `GRAFANA_PORT` | `3000` | Published Grafana port |
 
-Application environment access is centralized in `Config`. There are no API-key, secret-key, private-key, mainnet, wallet, or trading settings.
+Application environment access is centralized in `Config`. `HTTP_HOST` and `HTTP_PORT` apply directly to native runs; Compose fixes its internal service address and exposes `BACKEND_PORT` on localhost so Prometheus discovery cannot drift. There are no API-key, secret-key, private-key, mainnet, wallet, or trading settings.
 
 ## API
 
@@ -175,11 +185,11 @@ Every JSON market response contains `data_source`. Health distinguishes replay f
 }
 ```
 
-Financial values are strings such as `"73807.25"`, never binary floating-point JSON numbers. Errors use a consistent envelope with a stable code and safe message.
+Financial values are strings such as `"73807.25"`, never binary floating-point JSON numbers. Both depth sides use the same effective top-N level count when a book is asymmetric. Errors—including unknown routes and unsupported methods—use a consistent envelope with a stable code and safe message.
 
 ## Data model
 
-`markets` stores Nexus-compatible identifiers and symbols. `market_snapshots` stores validated analytics, source provenance, nonce, source timestamp, and capture timestamp. Financial columns are `NUMERIC`; imbalance is nullable. The `(market_id, data_source, captured_at DESC)` index supports newest-first source-isolated history.
+`markets` stores Nexus-compatible identifiers and symbols. `market_snapshots` stores validated analytics, mandatory source provenance, nonce, source timestamp, and capture timestamp. Financial columns are `NUMERIC`; imbalance is nullable. A unique source-update index prevents the same `(market, source, timestamp, nonce)` from being inserted after a process restart, while `(market_id, data_source, captured_at DESC)` supports newest-first source-isolated history.
 
 Compose project names create separate PostgreSQL, Prometheus, and Grafana volumes for demo and live. Database filtering provides a second isolation boundary.
 
@@ -203,14 +213,19 @@ Prometheus necessarily accepts floating samples. Conversion happens only at the 
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+make test
+make test-integration
 cargo build --release --locked
+cargo install cargo-audit --version 0.22.2 --locked
+make audit
 make demo
 make smoke
 ```
 
-Tests cover analytics precision and invalid books, status transitions, controlled stale detection, official SDK REST and stream fixtures, replay parsing and recovery, in-memory Axum routes, migrations, PostgreSQL precision, source-isolated history, container monitoring, and graceful recovery. CI never contacts Nexus.
+`make test` runs deterministic tests without infrastructure. `make test-integration` requires PostgreSQL and fails clearly when it is unavailable; CI always runs it through `cargo test --locked --all-features`. Tests cover analytics precision and invalid books, status transitions, controlled stale detection, official SDK REST and stream fixtures, replay parsing and recovery, in-memory Axum routes, migrations, durable deduplication, PostgreSQL precision/provenance, source-isolated history, container monitoring, and bounded shutdown. CI never contacts Nexus.
+
+The RustSec audit includes two documented optional-dependency exceptions in `.cargo/audit.toml`. The audit script independently fails if either vulnerable crate becomes reachable in the active build graph.
 
 See [docs/demo-script.md](docs/demo-script.md) for a concise portfolio walkthrough.
 
@@ -243,6 +258,10 @@ See [docs/decisions.md](docs/decisions.md) for the ADRs.
 - Apply typed deltas only after a complete official payload contract exists.
 - Add retention and downsampling after measuring long-running storage growth.
 - Consider multi-market tracking only after measuring REST budget, memory and metric cardinality.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the local workflow, [SECURITY.md](SECURITY.md) for private vulnerability reporting and security boundaries, and [CHANGELOG.md](CHANGELOG.md) for release history. GitHub issue and pull-request templates keep public reports reproducible and free of sensitive data.
 
 ## License
 

@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a focused improvement within the documented project scope.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete user or operator problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful change and its observable behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Trade-offs
+      description: Explain reliability, complexity, compatibility, and maintenance costs.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope confirmation
+      options:
+        - label: This does not add mainnet, authenticated trading, wallets, or fabricated live data.
+          required: true
+        - label: This preserves the single-service architecture unless a measured need justifies changing it.
+          required: true

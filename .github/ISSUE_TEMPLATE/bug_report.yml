@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible defect in the service, demo, or documentation.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private keys, or vulnerability details. Use SECURITY.md for security reports.
+  - type: dropdown
+    id: source
+    attributes:
+      label: Data source
+      options:
+        - replay
+        - nexus_live
+        - not applicable
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0 or a full commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Explain what happened and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: Include the smallest command sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Docker/Compose versions, Rust version, and sanitized logs when relevant.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed credentials and sensitive data from this report.
+          required: true
+        - label: I confirmed this issue is not an upstream Nexus Testnet availability report.
+          required: true

@@ -24,9 +24,9 @@
 
 **Context.** An order-book feed may emit many frames per second, while the product needs operational history rather than an event archive.
 
-**Decision.** Persist at `SNAPSHOT_INTERVAL_SECONDS` and skip a source timestamp that was already stored.
+**Decision.** Persist at `SNAPSHOT_INTERVAL_SECONDS`, identify a source update by market, provenance, source timestamp, and nonce, and enforce that identity with a PostgreSQL unique index. Process-local tracking is only an optimization.
 
-**Positive consequences.** Database growth and write load are bounded, temporary database failures do not block collection, and history queries remain straightforward.
+**Positive consequences.** Database growth and write load are bounded, restarts cannot duplicate the same source update, temporary database failures do not block collection, and history queries remain straightforward.
 
 **Limitations.** Microstructure changes between captures are not retained, so this database is not a replay log.
 
@@ -69,3 +69,13 @@
 **Positive consequences.** CI and portfolio demonstrations exercise analytics, persistence, recovery, metrics, and dashboards without depending on an external pre-1.0 service or misrepresenting fixture data as live.
 
 **Limitations.** Replay proves internal behavior, not current Nexus availability or real-time market fidelity. The separate live smoke test remains necessary for end-to-end upstream validation.
+
+## ADR-008: Local-only Compose publication
+
+**Context.** The demo uses intentionally simple development credentials for PostgreSQL and Grafana. Publishing those services on every host interface would be unsafe on untrusted networks.
+
+**Decision.** Bind all default Compose publications to `127.0.0.1`, keep the backend's internal container port fixed at 8080, and use `BACKEND_PORT` only for the host-side mapping. Treat the host-network override as a Linux troubleshooting path with explicit loopback listeners.
+
+**Positive consequences.** The quick start is reachable from the evaluator's browser without exposing the database, dashboard, or metrics endpoint to the local network. Prometheus service discovery cannot drift when a host port changes.
+
+**Limitations.** The Compose files are a development topology, not a production deployment. Remote access requires a deliberate binding, stronger credentials, TLS, and an appropriate network policy outside this repository.
