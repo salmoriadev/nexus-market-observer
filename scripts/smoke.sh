@@ -20,7 +20,22 @@ grafana_password="${grafana_password:-admin}"
 market="${NEXUS_MARKET:-BTC-USDX-PERP}"
 expected_source="${EXPECTED_DATA_SOURCE:-replay}"
 expected_health_statuses="${EXPECTED_HEALTH_STATUSES:-}"
-attempts=60
+stale_after_seconds="${STALE_AFTER_SECONDS:-$(env_file_value STALE_AFTER_SECONDS)}"
+stale_after_seconds="${stale_after_seconds:-15}"
+if [[ ! "${stale_after_seconds}" =~ ^[0-9]+$ || "${stale_after_seconds}" -eq 0 ]]; then
+  echo "STALE_AFTER_SECONDS must be a positive integer for the smoke test" >&2
+  exit 1
+fi
+max_market_data_age_ms="${MAX_MARKET_DATA_AGE_MS:-$((stale_after_seconds * 1000))}"
+if [[ ! "${max_market_data_age_ms}" =~ ^[0-9]+$ || "${max_market_data_age_ms}" -eq 0 ]]; then
+  echo "MAX_MARKET_DATA_AGE_MS must be a positive integer" >&2
+  exit 1
+fi
+attempts="${SMOKE_ATTEMPTS:-60}"
+if [[ ! "${attempts}" =~ ^[0-9]+$ || "${attempts}" -eq 0 ]]; then
+  echo "SMOKE_ATTEMPTS must be a positive integer" >&2
+  exit 1
+fi
 smoke_dir="$(mktemp -d)"
 trap 'rm -rf "${smoke_dir}"' EXIT
 
@@ -51,8 +66,15 @@ for ((attempt = 1; attempt <= attempts; attempt += 1)); do
   if request_json "/health" > "${smoke_dir}/health.json" 2>/dev/null; then
     source_mode="$(jq -r '.data_source.mode // empty' "${smoke_dir}/health.json")"
     health_status="$(jq -r '.status // empty' "${smoke_dir}/health.json")"
+    market_data_stale="$(jq -r '.market_data.stale' "${smoke_dir}/health.json")"
+    last_update_at="$(jq -r '.market_data.last_update_at // empty' "${smoke_dir}/health.json")"
+    last_update_age_ms="$(jq -r '.market_data.last_update_age_ms // empty' "${smoke_dir}/health.json")"
     if [[ "${source_mode}" == "${expected_source}" \
-      && ",${expected_health_statuses}," == *",${health_status},"* ]]; then
+      && ",${expected_health_statuses}," == *",${health_status},"* \
+      && "${market_data_stale}" == "false" \
+      && -n "${last_update_at}" \
+      && "${last_update_age_ms}" =~ ^[0-9]+$ \
+      && "${last_update_age_ms}" -le "${max_market_data_age_ms}" ]]; then
       break
     fi
   fi

@@ -15,12 +15,18 @@ All notable changes to this project are documented here. The format follows [Kee
 - Compose publishes development services on localhost only.
 - CI actions use immutable revisions and read-only token permissions.
 - Smoke checks validate exact health, Prometheus, and Grafana responses.
+- Host-network mode preserves custom database URLs and applies alternate backend ports consistently.
+- Compose contracts are checked automatically in CI.
+- External PostgreSQL deployments can disable the bundled database with a dedicated Compose override.
 
 ### Fixed
 
 - Live market-data age no longer reports a false zero after REST refresh.
 - Asymmetric books now calculate both depth sides over the same effective level count.
 - HTTP shutdown and container health checks now honor explicit bounded/configured behavior.
+- Security-exception reachability checks now resolve the same all-features graph used by CI.
+- Live smoke validation requires a fresh, timestamped market snapshot.
+- Native and integration-test Make targets honor an explicitly supplied `DATABASE_URL`.
 
 ## 0.1.0 - 2026-08-21
 

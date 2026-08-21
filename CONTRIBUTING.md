@@ -40,6 +40,7 @@ Run the dependency audit after installing its pinned tool version:
 ```bash
 cargo install cargo-audit --version 0.22.2 --locked
 make audit
+make validate-compose
 ```
 
 ## Pull requests
@@ -47,6 +48,8 @@ make audit
 Keep pull requests focused and explain the observable behavior they change. Add regression tests for bug fixes. Update the README, ADRs, migrations, fixtures, dashboard, or smoke test when their public contract changes.
 
 Before submitting, run the same locked checks used by CI and confirm `git diff --check` is clean. Live Nexus availability is never required for CI; use `make smoke-live` only as an explicit external integration check.
+
+The live smoke check accepts degraded connection status only while its REST market snapshot remains present and fresh. Retained stale data is never a successful live validation.
 
 ## Reporting security issues
 
