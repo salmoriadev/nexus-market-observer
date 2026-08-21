@@ -1,0 +1,12 @@
+# cargo-audit scans every optional dependency recorded in Cargo.lock, including
+# features which are not present in this application's resolved build graph.
+# scripts/audit.sh fails if either ignored crate ever becomes active.
+[advisories]
+ignore = [
+    # Optional rkyv support recorded by rust_decimal/chrono. No rkyv crate is
+    # compiled for this service; Decimal uses serde and SQLx integrations only.
+    "RUSTSEC-2026-0235",
+    # rsa belongs to SQLx's inactive MySQL driver. This crate enables only the
+    # PostgreSQL driver and performs no RSA private-key operations.
+    "RUSTSEC-2023-0071",
+]

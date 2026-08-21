@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -26,19 +34,26 @@ jobs:
       DATABASE_URL: postgres://nexus:nexus@localhost:5432/nexus_market_test
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, pinned 2026-08-21
+        with:
+          toolchain: 1.88.0
           components: rustfmt, clippy
       - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Run tests
-        run: cargo test --all-features
+        run: cargo test --locked --all-features
+      - name: Install RustSec audit tool
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit Rust dependencies
+        run: make audit
       - name: Build release binary
         run: cargo build --release --locked
       - name: Build Docker image
@@ -49,13 +64,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Create demo environment
         run: cp .env.example .env
       - name: Start deterministic demo
         run: make demo
       - name: Run end-to-end smoke test
         run: make smoke
+      - name: Validate smoke-test syntax
+        run: bash -n scripts/smoke.sh scripts/audit.sh
       - name: Show container state
         if: always()
         run: docker compose -p nexus-market-observer-demo ps

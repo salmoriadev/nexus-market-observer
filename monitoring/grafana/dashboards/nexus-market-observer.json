@@ -94,7 +94,7 @@
       "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
       "id": 10,
-      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, route) (rate(nexus_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{route}}", "refId": "A"}],
+      "targets": [{"expr": "max by (route) (nexus_http_request_duration_seconds{quantile=\"0.95\"})", "legendFormat": "p95 {{route}}", "refId": "A"}],
       "title": "API Latency (p95)",
       "type": "timeseries"
     }

@@ -5,8 +5,11 @@ services:
     network_mode: host
     ports: !reset []
     networks: !reset []
-    extra_hosts:
-      - "postgres:host-gateway"
+    environment:
+      HTTP_HOST: 127.0.0.1
+      HTTP_PORT: 8080
+      # PostgreSQL remains a bridged container published on host loopback.
+      DATABASE_URL: postgres://nexus:nexus@127.0.0.1:5432/nexus_market
 
   prometheus:
     network_mode: host
@@ -14,12 +17,17 @@ services:
     networks: !reset []
     extra_hosts:
       - "backend:127.0.0.1"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=127.0.0.1:9090
 
   grafana:
     network_mode: host
     ports: !reset []
     networks: !reset []
     environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
       GF_SERVER_HTTP_PORT: ${GRAFANA_PORT:-3000}
     extra_hosts:
       - "prometheus:127.0.0.1"
