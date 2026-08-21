@@ -23,12 +23,12 @@ pub fn init_tracing(config: &Config) -> Result<(), String> {
     }
 }
 
-pub fn init_metrics() -> Result<PrometheusHandle, String> {
+pub fn init_metrics(market: &str) -> Result<PrometheusHandle, String> {
     let recorder = PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
     metrics::set_global_recorder(recorder)
         .map_err(|error| format!("failed to install Prometheus recorder: {error}"))?;
-    initialize_metric_series();
+    initialize_metric_series(market);
     Ok(handle)
 }
 
@@ -36,17 +36,18 @@ pub fn isolated_metrics_handle() -> PrometheusHandle {
     PrometheusBuilder::new().build_recorder().handle()
 }
 
-fn initialize_metric_series() {
+fn initialize_metric_series(market: &str) {
     for source in ["replay", "nexus_live"] {
         metrics::gauge!("nexus_ws_connected", "source" => source).set(0.0);
         metrics::counter!("nexus_ws_reconnects_total", "source" => source).absolute(0);
         metrics::counter!("nexus_ws_lagged_frames_total", "source" => source).absolute(0);
-        metrics::counter!("nexus_resyncs_total", "source" => source).absolute(0);
-        metrics::counter!("nexus_snapshots_persisted_total", "source" => source).absolute(0);
+        metrics::counter!("nexus_resyncs_total", "market" => market.to_string(), "source" => source).absolute(0);
+        metrics::counter!("nexus_market_updates_total", "market" => market.to_string(), "source" => source).absolute(0);
+        metrics::counter!("nexus_snapshots_persisted_total", "market" => market.to_string(), "source" => source).absolute(0);
     }
-    metrics::counter!("nexus_database_errors_total").absolute(0);
-    metrics::counter!("nexus_http_requests_total", "method" => "none", "route" => "none", "status" => "0").absolute(0);
-    metrics::histogram!("nexus_http_request_duration_seconds", "method" => "none", "route" => "none").record(0.0);
+    for operation in ["persist_snapshot", "ping"] {
+        metrics::counter!("nexus_database_errors_total", "operation" => operation).absolute(0);
+    }
 }
 
 pub fn record_market_update(

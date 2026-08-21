@@ -17,9 +17,11 @@ use crate::replay::{run_replay_collector, ReplaySource};
 use crate::state::{MarketState, ServiceStatus, SharedMarketState};
 
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const HTTP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn run(config: Config) -> Result<(), AppError> {
-    let prometheus = crate::telemetry::init_metrics().map_err(AppError::Task)?;
+    let prometheus =
+        crate::telemetry::init_metrics(&config.nexus_market).map_err(AppError::Task)?;
     tracing::info!(
         service = "nexus-market-observer",
         version = env!("CARGO_PKG_VERSION"),
@@ -87,39 +89,69 @@ pub async fn run(config: Config) -> Result<(), AppError> {
         started_at: Instant::now(),
         prometheus,
     };
-    let shutdown_state = Arc::clone(&market_state);
-    let shutdown_token = cancellation.clone();
-    let server = axum::serve(listener, api::router(context)).with_graceful_shutdown(async move {
-        wait_for_shutdown_signal().await;
-        {
-            let mut state = shutdown_state.write().await;
-            if state
-                .service_status
-                .can_transition_to(ServiceStatus::ShuttingDown)
-            {
-                state.service_status = ServiceStatus::ShuttingDown;
-            }
-        }
-        tracing::info!("shutdown signal received; stopping workers and HTTP server");
-        shutdown_token.cancel();
+    let server_shutdown = CancellationToken::new();
+    let server_shutdown_signal = server_shutdown.clone();
+    let mut server = tokio::spawn(async move {
+        axum::serve(listener, api::router(context))
+            .with_graceful_shutdown(server_shutdown_signal.cancelled_owned())
+            .await
     });
 
-    let server_error = server.await.err().map(|error| error.to_string());
-    if let Some(error) = &server_error {
-        cancellation.cancel();
-        tracing::error!(error, "HTTP server failed");
-    }
+    let server_finished = tokio::select! {
+        _ = wait_for_shutdown_signal() => {
+            tracing::info!("shutdown signal received; stopping workers and HTTP server");
+            None
+        }
+        result = &mut server => Some(result),
+    };
 
+    // Cancellation begins immediately. HTTP gets a separate bounded drain
+    // window while collectors and workers stop accepting more work.
     cancellation.cancel();
     mark_shutting_down(&market_state).await;
+    server_shutdown.cancel();
+    let server_error = match server_finished {
+        Some(result) => server_result_error(result, true),
+        None => await_http_server(&mut server, HTTP_SHUTDOWN_TIMEOUT).await,
+    };
     await_worker("market data collector", collector).await;
     await_worker("snapshot persistence", persistence).await;
     await_worker("stale detector", stale_detector).await;
     pool.close().await;
     tracing::info!("service shutdown completed");
     match server_error {
-        Some(error) => Err(AppError::Task(format!("HTTP server failed: {error}"))),
+        Some(error) => Err(AppError::Task(error)),
         None => Ok(()),
+    }
+}
+
+fn server_result_error(
+    result: Result<Result<(), std::io::Error>, tokio::task::JoinError>,
+    unexpected: bool,
+) -> Option<String> {
+    match result {
+        Ok(Ok(())) if unexpected => Some("HTTP server stopped unexpectedly".to_string()),
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(format!("HTTP server failed: {error}")),
+        Err(error) => Some(format!("HTTP server task failed: {error}")),
+    }
+}
+
+async fn await_http_server(
+    handle: &mut JoinHandle<Result<(), std::io::Error>>,
+    timeout: Duration,
+) -> Option<String> {
+    match tokio::time::timeout(timeout, &mut *handle).await {
+        Ok(result) => server_result_error(result, false),
+        Err(_) => {
+            tracing::error!(
+                timeout_seconds = timeout.as_secs(),
+                "HTTP connections did not drain before the shutdown timeout; aborting the server task"
+            );
+            handle.abort();
+            let _ = handle.await;
+            None
+        }
     }
 }
 
@@ -201,7 +233,14 @@ pub async fn main_entry() -> ExitCode {
 }
 
 pub fn container_healthcheck() -> ExitCode {
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+    let port = match Config::from_env() {
+        Ok(config) => config.http_port,
+        Err(error) => {
+            eprintln!("healthcheck configuration error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let mut stream = match TcpStream::connect_timeout(&address, Duration::from_secs(2)) {
         Ok(stream) => stream,
         Err(_) => return ExitCode::FAILURE,
@@ -222,9 +261,24 @@ pub fn container_healthcheck() -> ExitCode {
     let status = String::from_utf8_lossy(&response[..count]);
     // Container health is a liveness check. Readiness remains represented by
     // /health without blocking monitoring during a Nexus outage.
-    if status.starts_with("HTTP/1.1 ") || status.starts_with("HTTP/1.0 ") {
+    if status.starts_with("HTTP/1.1 200") || status.starts_with("HTTP/1.0 200") {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn http_shutdown_drain_is_bounded() {
+        let mut server = tokio::spawn(pending::<Result<(), std::io::Error>>());
+        let error = await_http_server(&mut server, Duration::from_millis(10)).await;
+        assert!(error.is_none());
+        assert!(server.is_finished());
     }
 }

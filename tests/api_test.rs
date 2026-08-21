@@ -220,6 +220,39 @@ async fn unknown_market_uses_the_consistent_error_envelope() {
 }
 
 #[tokio::test]
+async fn unknown_routes_use_the_consistent_error_envelope() {
+    let (status, body) = response_json(app(ServiceStatus::Healthy, true), "/unknown").await;
+    assert_eq!(status, 404);
+    assert_eq!(body["error"]["code"], "ROUTE_NOT_FOUND");
+}
+
+#[tokio::test]
+async fn unsupported_methods_use_the_consistent_error_envelope() {
+    let response = app(ServiceStatus::Healthy, true)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/markets")
+                .body(Body::empty())
+                .expect("valid test request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::METHOD_NOT_ALLOWED
+    );
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("response body")
+        .to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).expect("JSON response");
+    assert_eq!(body["error"]["code"], "METHOD_NOT_ALLOWED");
+}
+
+#[tokio::test]
 async fn history_returns_decimal_strings() {
     let (status, body) = response_json(
         app(ServiceStatus::Healthy, true),

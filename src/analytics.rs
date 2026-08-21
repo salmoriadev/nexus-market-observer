@@ -66,8 +66,11 @@ pub fn calculate(
     let mut sorted_asks = asks.to_vec();
     sorted_asks.sort_by_key(|level| level.price);
 
-    let bid_depth = sum_amounts(sorted_bids.iter().take(depth_levels))?;
-    let ask_depth = sum_amounts(sorted_asks.iter().take(depth_levels))?;
+    // Both sides use the same effective level count so depth and imbalance
+    // never compare different portions of an asymmetric book.
+    let effective_depth = depth_levels.min(sorted_bids.len()).min(sorted_asks.len());
+    let bid_depth = sum_amounts(sorted_bids.iter().take(effective_depth))?;
+    let ask_depth = sum_amounts(sorted_asks.iter().take(effective_depth))?;
     let total_depth = bid_depth
         .checked_add(ask_depth)
         .ok_or(DomainError::DecimalOverflow)?;
@@ -91,7 +94,7 @@ pub fn calculate(
         bid_depth,
         ask_depth,
         imbalance,
-        depth_levels: depth_levels.min(bids.len()).min(asks.len()),
+        depth_levels: effective_depth,
     })
 }
 
@@ -218,6 +221,24 @@ mod tests {
         assert_eq!(result.bid_depth, dec!(3));
         assert_eq!(result.ask_depth, dec!(7));
         assert_eq!(result.depth_levels, 2);
+    }
+
+    #[test]
+    fn asymmetric_books_use_the_same_effective_depth_on_both_sides() {
+        let result = calculate(
+            &[
+                level(dec!(10), dec!(1)),
+                level(dec!(9), dec!(2)),
+                level(dec!(8), dec!(100)),
+            ],
+            &[level(dec!(11), dec!(3)), level(dec!(12), dec!(4))],
+            10,
+        )
+        .expect("valid asymmetric fixture");
+
+        assert_eq!(result.depth_levels, 2);
+        assert_eq!(result.bid_depth, dec!(3));
+        assert_eq!(result.ask_depth, dec!(7));
     }
 
     #[test]

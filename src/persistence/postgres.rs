@@ -47,10 +47,10 @@ impl PostgresRepository {
         Ok(())
     }
 
-    pub async fn persist_snapshot(&self, snapshot: &PersistableSnapshot) -> Result<(), AppError> {
+    pub async fn persist_snapshot(&self, snapshot: &PersistableSnapshot) -> Result<bool, AppError> {
         self.upsert_market(&snapshot.market_id, &snapshot.symbol)
             .await?;
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO market_snapshots (
                 market_id, data_source, best_bid, best_ask, mid_price, spread, spread_bps,
@@ -58,6 +58,7 @@ impl PostgresRepository {
                 source_updated_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (market_id, data_source, source_updated_at, source_nonce) DO NOTHING
             "#,
         )
         .bind(&snapshot.market_id)
@@ -75,7 +76,7 @@ impl PostgresRepository {
         .bind(snapshot.source_updated_at)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     pub fn pool(&self) -> &PgPool {

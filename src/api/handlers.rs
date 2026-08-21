@@ -211,6 +211,14 @@ pub async fn metrics(State(context): State<AppContext>) -> impl IntoResponse {
     )
 }
 
+pub async fn route_not_found() -> AppError {
+    AppError::RouteNotFound
+}
+
+pub async fn method_not_allowed() -> AppError {
+    AppError::MethodNotAllowed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -62,7 +62,7 @@ pub async fn run_persistence_worker(
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut last_persisted_update = None;
+    let mut last_persisted_identity = None;
 
     loop {
         tokio::select! {
@@ -71,16 +71,24 @@ pub async fn run_persistence_worker(
                 break;
             }
             _ = ticker.tick() => {
-                let snapshot = snapshot_for_persistence(&state, last_persisted_update, data_source).await;
+                let snapshot = snapshot_for_persistence(&state, last_persisted_identity, data_source).await;
                 if let Some(snapshot) = snapshot {
-                    let update_time = snapshot.source_updated_at;
+                    let identity = (snapshot.source_updated_at, snapshot.source_nonce);
                     match repository.persist_snapshot(&snapshot).await {
-                        Ok(()) => {
+                        Ok(inserted) => {
                             if !database_connected.swap(true, Ordering::Relaxed) {
                                 tracing::info!("PostgreSQL persistence recovered");
                             }
-                            last_persisted_update = Some(update_time);
-                            metrics::counter!("nexus_snapshots_persisted_total", "market" => snapshot.symbol, "source" => data_source).increment(1);
+                            last_persisted_identity = Some(identity);
+                            if inserted {
+                                metrics::counter!("nexus_snapshots_persisted_total", "market" => snapshot.symbol, "source" => data_source).increment(1);
+                            } else {
+                                tracing::debug!(
+                                    market = snapshot.symbol,
+                                    source = data_source,
+                                    "skipped a snapshot already present in PostgreSQL"
+                                );
+                            }
                         }
                         Err(error) => {
                             database_connected.store(false, Ordering::Relaxed);
@@ -109,12 +117,13 @@ pub async fn run_persistence_worker(
 
 async fn snapshot_for_persistence(
     state: &SharedMarketState,
-    last_persisted_update: Option<DateTime<Utc>>,
+    last_persisted_identity: Option<(DateTime<Utc>, Option<i64>)>,
     data_source: &str,
 ) -> Option<PersistableSnapshot> {
     let state = state.read().await;
     let source_updated_at = state.last_update_at?;
-    if last_persisted_update.is_some_and(|last| last >= source_updated_at) {
+    let identity = (source_updated_at, state.source_nonce_or_sequence);
+    if last_persisted_identity.is_some_and(|last| last == identity) {
         return None;
     }
 

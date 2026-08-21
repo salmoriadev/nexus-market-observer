@@ -1,3 +1,5 @@
+#![cfg(feature = "postgres-integration")]
+
 use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
@@ -7,10 +9,8 @@ use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
 async fn postgres_migrations_persistence_history_limit_null_and_precision() {
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
-        eprintln!("DATABASE_URL is not set; PostgreSQL integration test is skipped locally");
-        return;
-    };
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL is required when postgres-integration tests are enabled");
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .acquire_timeout(Duration::from_secs(5))
@@ -47,6 +47,14 @@ async fn postgres_migrations_persistence_history_limit_null_and_precision() {
         .persist_snapshot(&first)
         .await
         .expect("first snapshot");
+    let duplicate_inserted = repository
+        .persist_snapshot(&first)
+        .await
+        .expect("duplicate snapshot attempt");
+    assert!(
+        !duplicate_inserted,
+        "the database must reject duplicate source updates"
+    );
     tokio::time::sleep(Duration::from_millis(10)).await;
     let second = PersistableSnapshot {
         source_nonce: Some(2),
@@ -97,6 +105,35 @@ async fn postgres_migrations_persistence_history_limit_null_and_precision() {
         .expect("source-filtered history");
     assert_eq!(replay_only.len(), 2);
     assert_eq!(live_only.len(), 1);
+
+    let row_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM market_snapshots WHERE market_id = $1 AND data_source = 'replay'",
+    )
+    .bind(&market)
+    .fetch_one(&pool)
+    .await
+    .expect("snapshot count");
+    assert_eq!(
+        row_count, 2,
+        "duplicate writes must not create history rows"
+    );
+
+    let missing_source = sqlx::query(
+        r#"
+        INSERT INTO market_snapshots (
+            market_id, best_bid, best_ask, mid_price, spread, spread_bps,
+            bid_depth, ask_depth, depth_levels, source_updated_at
+        )
+        VALUES ($1, 1, 2, 1.5, 1, 1, 1, 1, 1, NOW())
+        "#,
+    )
+    .bind(&market)
+    .execute(&pool)
+    .await;
+    assert!(
+        missing_source.is_err(),
+        "new snapshots must declare replay or nexus_live provenance"
+    );
 
     sqlx::query("DELETE FROM market_snapshots WHERE market_id = $1")
         .bind(&market)

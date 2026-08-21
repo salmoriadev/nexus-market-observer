@@ -1,4 +1,4 @@
-.PHONY: build run test lint fmt up demo live down down-live logs logs-live smoke smoke-live
+.PHONY: build run test test-integration test-all audit lint fmt up demo live down down-live logs logs-live smoke smoke-live
 
 COMPOSE := docker compose
 DEMO_PROJECT := nexus-market-observer-demo
@@ -11,10 +11,18 @@ run:
 	DATABASE_URL="$${DATABASE_URL_LOCAL:-postgres://nexus:nexus@localhost:5432/nexus_market}" cargo run --locked
 
 test:
-	cargo test --all-features
+	cargo test --locked
+
+test-integration:
+	DATABASE_URL="$${DATABASE_URL_LOCAL:-postgres://nexus:nexus@localhost:5432/nexus_market}" cargo test --locked --all-features --test persistence_test
+
+test-all: test test-integration
+
+audit:
+	./scripts/audit.sh
 
 lint:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --locked --all-targets --all-features -- -D warnings
 
 fmt:
 	cargo fmt --all

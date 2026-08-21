@@ -5,6 +5,14 @@ edition = "2021"
 rust-version = "1.88"
 description = "Fault-tolerant Rust service for ingesting, analyzing, persisting, and observing Nexus Exchange market data."
 license = "MIT"
+readme = "README.md"
+publish = false
+keywords = ["rust", "market-data", "nexus", "postgresql", "observability"]
+categories = ["web-programming::http-server"]
+
+[features]
+default = []
+postgres-integration = []
 
 [dependencies]
 async-trait = "0.1"

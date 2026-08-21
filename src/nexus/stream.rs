@@ -351,7 +351,6 @@ async fn perform_resync(
         metrics_snapshot.spread_bps,
         metrics_snapshot.imbalance,
     );
-    telemetry::record_market_age(market, SOURCE, Duration::ZERO);
     tracing::debug!(
         market,
         nonce = snapshot.nonce,
@@ -408,9 +407,9 @@ pub async fn run_stale_detector(
                 let now = Utc::now();
                 let (market, age, became_stale) = {
                     let mut current = state.write().await;
-                    let age = current.last_update_at.and_then(|last| {
-                        now.signed_duration_since(last).to_std().ok()
-                    });
+                    let age = current
+                        .last_update_at
+                        .and_then(|last| elapsed_since(now, last));
                     let became_stale = current.mark_stale_if_due(now, stale_after);
                     (current.symbol.clone(), age, became_stale)
                 };
@@ -425,8 +424,16 @@ pub async fn run_stale_detector(
     }
 }
 
+fn elapsed_since(
+    now: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+) -> Option<Duration> {
+    now.signed_duration_since(updated_at).to_std().ok()
+}
+
 #[cfg(test)]
 mod tests {
+    use chrono::TimeDelta;
     use serde_json::json;
 
     use super::*;
@@ -503,5 +510,15 @@ mod tests {
         set_stream_sequence(&state, 10).await;
         assert!(!update_stream_sequence_and_detect_gap(&state, 11).await);
         assert!(update_stream_sequence_and_detect_gap(&state, 13).await);
+    }
+
+    #[test]
+    fn source_age_uses_the_exchange_timestamp_instead_of_refresh_time() {
+        let now = Utc::now();
+        let source_updated_at = now - TimeDelta::seconds(37);
+        assert_eq!(
+            elapsed_since(now, source_updated_at),
+            Some(Duration::from_secs(37))
+        );
     }
 }

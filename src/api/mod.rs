@@ -35,6 +35,8 @@ pub fn router(context: AppContext) -> Router {
         .route("/markets/{symbol}", get(handlers::market))
         .route("/markets/{symbol}/history", get(handlers::market_history))
         .route("/metrics", get(handlers::metrics))
+        .fallback(handlers::route_not_found)
+        .method_not_allowed_fallback(handlers::method_not_allowed)
         .route_layer(middleware::from_fn(track_http_metrics))
         .layer(TraceLayer::new_for_http())
         .with_state(context)
@@ -42,7 +44,12 @@ pub fn router(context: AppContext) -> Router {
 
 async fn track_http_metrics(request: Request<axum::body::Body>, next: Next) -> Response {
     let started_at = Instant::now();
-    let method = request.method().to_string();
+    let method = match request.method().as_str() {
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        _ => "OTHER",
+    };
     let route = request
         .extensions()
         .get::<MatchedPath>()
@@ -53,7 +60,7 @@ async fn track_http_metrics(request: Request<axum::body::Body>, next: Next) -> R
     let status = response.status().as_u16().to_string();
     metrics::counter!(
         "nexus_http_requests_total",
-        "method" => method.clone(),
+        "method" => method,
         "route" => route.clone(),
         "status" => status
     )

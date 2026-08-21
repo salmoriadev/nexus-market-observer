@@ -28,6 +28,10 @@ pub enum AppError {
     InvalidLimit(String),
     #[error("market state is not available yet")]
     StateUnavailable,
+    #[error("API route was not found")]
+    RouteNotFound,
+    #[error("HTTP method is not allowed for this route")]
+    MethodNotAllowed,
     #[error("internal service error")]
     Internal,
 }
@@ -83,6 +87,16 @@ impl IntoResponse for AppError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "MARKET_STATE_UNAVAILABLE",
                 "Market state is not available yet".to_string(),
+            ),
+            Self::RouteNotFound => (
+                StatusCode::NOT_FOUND,
+                "ROUTE_NOT_FOUND",
+                "The requested API route was not found".to_string(),
+            ),
+            Self::MethodNotAllowed => (
+                StatusCode::METHOD_NOT_ALLOWED,
+                "METHOD_NOT_ALLOWED",
+                "The HTTP method is not allowed for this route".to_string(),
             ),
             _ => {
                 tracing::error!(error = %self, "request failed");

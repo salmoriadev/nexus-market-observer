@@ -145,6 +145,12 @@ impl Config {
                 reason: "must not be blank".to_string(),
             });
         }
+        if self.http_port == 0 {
+            return Err(ConfigError::InvalidValue {
+                name: "HTTP_PORT",
+                reason: "must be between 1 and 65535".to_string(),
+            });
+        }
         if self.market_data_source == MarketDataSourceMode::Replay
             && self.nexus_market != "BTC-USDX-PERP"
         {
@@ -262,6 +268,13 @@ mod tests {
     fn replay_rejects_an_unknown_fixture_market() {
         let mut config = Config::test("postgres://localhost/test".to_string());
         config.nexus_market = "ETH-USDX-PERP".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_port_zero() {
+        let mut config = Config::test("postgres://localhost/test".to_string());
+        config.http_port = 0;
         assert!(config.validate().is_err());
     }
 }
