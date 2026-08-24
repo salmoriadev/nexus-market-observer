@@ -1,3 +1,9 @@
+//! HTTP handlers and query validation.
+//!
+//! Handlers translate internal state into stable response models without exposing SDK payloads or
+//! database details. Shared-state locks are scoped to in-memory reads and are released before any
+//! PostgreSQL query is awaited.
+
 use std::sync::atomic::Ordering;
 
 use axum::extract::{Path, Query, State};
@@ -16,6 +22,11 @@ use super::models::{
 };
 use super::AppContext;
 
+/// Reports process availability together with market-data and persistence health.
+///
+/// A usable but stale or degraded snapshot returns HTTP 200 because the process can still serve
+/// explicitly marked historical values. HTTP 503 is reserved for startup or another state in which
+/// no complete validated snapshot has ever been obtained.
 pub async fn health(State(context): State<AppContext>) -> Response {
     let database_connected = context.database_connected.load(Ordering::Relaxed);
     let now = Utc::now();
@@ -71,6 +82,7 @@ pub async fn health(State(context): State<AppContext>) -> Response {
     (status, Json(body)).into_response()
 }
 
+/// Returns the latest known public market catalog.
 pub async fn markets(
     State(context): State<AppContext>,
 ) -> Json<MarketsResponse<MarketCatalogItem>> {
@@ -95,6 +107,9 @@ pub async fn markets(
     })
 }
 
+/// Returns current analytics for the configured market.
+///
+/// Unknown symbols return 404; the configured symbol returns 503 until a usable snapshot exists.
 pub async fn market(
     State(context): State<AppContext>,
     Path(symbol): Path<String>,
@@ -143,16 +158,23 @@ pub async fn market(
     Ok(Json(response))
 }
 
+/// Raw history query parameters.
+///
+/// `limit` remains a string until explicit validation so malformed values use the service's stable
+/// error envelope instead of Axum's default extractor rejection body.
 #[derive(Debug, Deserialize)]
 pub struct HistoryQuery {
     limit: Option<String>,
 }
 
+/// Returns source-isolated, newest-first snapshots from PostgreSQL.
 pub async fn market_history(
     State(context): State<AppContext>,
     Path(symbol): Path<String>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<HistoryResponse>, AppError> {
+    // Restrict the state lock to the catalog lookup; the database query below must never run while
+    // a Tokio RwLock guard is held.
     let known = {
         let state = context.market_state.read().await;
         symbol == context.config.nexus_market
@@ -201,6 +223,7 @@ fn parse_history_limit(raw: Option<&str>) -> Result<i64, AppError> {
     Ok(limit)
 }
 
+/// Renders metrics using the Prometheus text exposition format.
 pub async fn metrics(State(context): State<AppContext>) -> impl IntoResponse {
     (
         [(
@@ -211,10 +234,12 @@ pub async fn metrics(State(context): State<AppContext>) -> impl IntoResponse {
     )
 }
 
+/// Produces the centralized JSON response for an unmatched route.
 pub async fn route_not_found() -> AppError {
     AppError::RouteNotFound
 }
 
+/// Produces the centralized JSON response for an unsupported HTTP method.
 pub async fn method_not_allowed() -> AppError {
     AppError::MethodNotAllowed
 }

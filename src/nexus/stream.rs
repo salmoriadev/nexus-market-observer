@@ -1,3 +1,11 @@
+//! Live Nexus collector, stream classification, resynchronization, and stale detection.
+//!
+//! The pinned SDK exposes sequence-bearing `book` events, but the current public payload contract
+//! does not provide enough typed information to prove a complete local book. WebSocket events are
+//! therefore treated as change notifications: their sequence detects loss of continuity, while a
+//! debounced REST snapshot remains authoritative. Disconnect, lag, `out_of_sync`, or a sequence gap
+//! discards confidence and requires a successful REST resync before the service can recover.
+
 use std::future::pending;
 use std::time::{Duration, Instant};
 
@@ -18,18 +26,31 @@ const ANALYTICS_DEPTH_LEVELS: usize = 10;
 const SOURCE: &str = "nexus_live";
 const WS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const WS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(500);
+/// Explanation surfaced while the official SDK has no usable public testnet WebSocket origin.
+///
+/// This is an upstream limitation tracked as Nexus ENG-3398, not a simulated success path. REST
+/// snapshots may remain usable, but live mode stays explicitly degraded while disconnected.
 pub const REST_REFRESH_FALLBACK_REASON: &str =
     "official Nexus SDK 0.9.1 has no usable testnet WebSocket origin (ENG-3398); REST refresh fallback is active";
 
+/// Small internal event vocabulary derived from official SDK events and typed envelopes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CollectorEvent {
+    /// The SDK established a WebSocket transport.
     Connected,
+    /// The SDK transport disconnected with its reported reason.
     Disconnected(String),
+    /// The SDK consumer reported dropped frames.
     Lagged { dropped: u64 },
+    /// The server accepted the book subscription at a known sequence.
     Subscribed { sequence: u64 },
+    /// A book change notification arrived at a known sequence.
     BookUpdate { sequence: u64 },
+    /// The server reported that retained stream history cannot satisfy continuity.
     OutOfSync,
+    /// The server returned a protocol-level error.
     ServerError(String),
+    /// A valid but unsupported or unrelated frame, ignored for forward compatibility.
     Unknown,
 }
 
@@ -62,6 +83,15 @@ enum StreamEnvelope {
     },
 }
 
+/// Converts an official SDK event into the collector's bounded event vocabulary.
+///
+/// Messages for other markets or channels become [`CollectorEvent::Unknown`]. Recognized book
+/// messages are deserialized into a typed internal envelope rather than inspected through ad-hoc
+/// JSON indexing.
+///
+/// # Errors
+///
+/// Returns [`DomainError::InvalidStreamPayload`] when a recognized envelope is malformed.
 pub fn classify_sdk_event(
     event: Event,
     tracked_market: &str,
@@ -130,6 +160,11 @@ fn classify_message(value: Value, tracked_market: &str) -> Result<CollectorEvent
     }
 }
 
+/// Runs the resilient live collector until cancellation.
+///
+/// The task combines periodic authoritative REST refreshes, WebSocket event handling, and a bounded
+/// subscription retry cadence in one `tokio::select!` loop. Individual Nexus failures update shared
+/// health and are retried; they do not terminate the process or HTTP server.
 pub async fn run_nexus_collector(
     adapter: NexusAdapter,
     state: SharedMarketState,
@@ -147,10 +182,13 @@ pub async fn run_nexus_collector(
         mark_degraded(&state, error.to_string()).await;
     }
 
+    // Subscription construction is retained even when the current testnet origin is unavailable;
+    // this lets the same code recover automatically if the official endpoint becomes usable.
     let mut subscription = Some(adapter.subscribe_book(&market));
     let mut ws_connected = false;
     let mut has_connected_once = false;
     let mut rest_ticker = tokio::time::interval(rest_refresh_interval);
+    // Missed ticks are skipped so network pauses never cause a burst of obsolete REST requests.
     rest_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     rest_ticker.tick().await;
     let mut ws_retry_ticker = tokio::time::interval(WS_RETRY_INTERVAL);
@@ -230,6 +268,8 @@ pub async fn run_nexus_collector(
                             metrics::counter!("nexus_ws_lagged_frames_total", "source" => SOURCE).increment(1);
                             mark_stale(&state, "Nexus WebSocket sequence gap detected").await;
                         }
+                        // The payload is intentionally not applied as a delta. A debounced REST
+                        // snapshot is the smallest correct fallback supported by the public contract.
                         if gap || last_ws_refresh.elapsed() >= WS_REFRESH_DEBOUNCE {
                             last_ws_refresh = Instant::now();
                             if let Err(error) = perform_resync(&adapter, &state, &market, ws_connected).await {
@@ -293,6 +333,8 @@ async fn perform_resync(
         }
     }
 
+    // Every state guard ends before external I/O. This prevents slow Nexus calls from blocking API,
+    // persistence, stale detection, or shutdown state changes.
     let catalog = adapter.fetch_catalog(market).await?;
     {
         let mut current = state.write().await;
@@ -315,6 +357,7 @@ async fn perform_resync(
             snapshot.symbol
         )));
     }
+    // Validate the entire candidate snapshot before replacing any previously usable values.
     let analytics = calculate(&snapshot.bids, &snapshot.asks, ANALYTICS_DEPTH_LEVELS)?;
     let metrics_snapshot = analytics.clone();
     {
@@ -389,6 +432,11 @@ async fn update_stream_sequence_and_detect_gap(state: &SharedMarketState, sequen
     gap
 }
 
+/// Periodically derives data age from the source timestamp and marks overdue values stale.
+///
+/// The worker records the age even when another recovery status takes precedence. It never clears
+/// old prices or substitutes zeroes, allowing clients to see both the last valid values and their
+/// loss of freshness.
 pub async fn run_stale_detector(
     state: SharedMarketState,
     stale_after: Duration,

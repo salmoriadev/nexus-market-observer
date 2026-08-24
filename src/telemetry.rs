@@ -1,3 +1,10 @@
+//! Structured logging and Prometheus instrumentation.
+//!
+//! Metric labels are restricted to configured markets, fixed source names, normalized HTTP routes,
+//! and bounded operation names. Financial values remain [`rust_decimal::Decimal`] everywhere else;
+//! lossy `f64` conversion occurs only at the Prometheus boundary, where the metrics protocol
+//! requires floating-point samples.
+
 use std::time::Duration;
 
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -5,6 +12,10 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::{AppEnvironment, Config};
 
+/// Installs the global tracing subscriber selected by the application environment.
+///
+/// Production uses JSON for log aggregation; development and tests use compact human-readable
+/// output. This function must be called at most once per process.
 pub fn init_tracing(config: &Config) -> Result<(), String> {
     let filter = EnvFilter::try_new(&config.rust_log)
         .map_err(|error| format!("invalid RUST_LOG filter: {error}"))?;
@@ -23,6 +34,10 @@ pub fn init_tracing(config: &Config) -> Result<(), String> {
     }
 }
 
+/// Installs the process-wide metrics recorder and pre-creates bounded time series.
+///
+/// Pre-initialization makes zero-valued counters visible to Prometheus and Grafana before the first
+/// source event. This function must be called at most once per process.
 pub fn init_metrics(market: &str) -> Result<PrometheusHandle, String> {
     let recorder = PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
@@ -32,6 +47,7 @@ pub fn init_metrics(market: &str) -> Result<PrometheusHandle, String> {
     Ok(handle)
 }
 
+/// Creates a recorder handle for in-memory router tests without installing a global recorder.
 pub fn isolated_metrics_handle() -> PrometheusHandle {
     PrometheusBuilder::new().build_recorder().handle()
 }
@@ -50,6 +66,10 @@ fn initialize_metric_series(market: &str) {
     }
 }
 
+/// Records a validated market update and its derived gauges.
+///
+/// Values that cannot be represented by the telemetry backend are omitted rather than replaced
+/// with a plausible zero.
 pub fn record_market_update(
     market: &str,
     source: &'static str,
@@ -69,6 +89,7 @@ pub fn record_market_update(
     }
 }
 
+/// Updates the age gauge from an exchange or replay source timestamp.
 pub fn record_market_age(market: &str, source: &'static str, age: Duration) {
     metrics::gauge!("nexus_market_data_age_seconds", "market" => market.to_string(), "source" => source)
         .set(age.as_secs_f64());

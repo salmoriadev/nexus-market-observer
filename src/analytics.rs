@@ -1,26 +1,58 @@
+//! Pure, decimal-safe order-book analytics.
+//!
+//! This module has no network, storage, clock, or shared-state dependencies. Collectors must pass
+//! a complete candidate book through [`calculate`] before publishing it, which keeps malformed,
+//! one-sided, or crossed books out of the application state.
+
 use rust_decimal::Decimal;
 
 use crate::error::DomainError;
 
+/// One price level from either side of an order book.
+///
+/// Within the service domain, both values remain [`Decimal`] through persistence and JSON
+/// serialization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BookLevel {
+    /// Limit price for this level.
     pub price: Decimal,
+    /// Aggregate quantity available at this price.
     pub amount: Decimal,
 }
 
+/// Validated metrics derived from a two-sided order book.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BookAnalytics {
+    /// Highest bid price.
     pub best_bid: Decimal,
+    /// Lowest ask price.
     pub best_ask: Decimal,
+    /// Arithmetic mean of the best bid and best ask.
     pub mid_price: Decimal,
+    /// Absolute distance between the best ask and best bid.
     pub spread: Decimal,
+    /// Spread relative to the mid-price, expressed in basis points.
     pub spread_bps: Decimal,
+    /// Quantity available across the selected bid levels.
     pub bid_depth: Decimal,
+    /// Quantity available across the selected ask levels.
     pub ask_depth: Decimal,
+    /// Normalized depth difference, or `None` when total depth is zero.
     pub imbalance: Option<Decimal>,
+    /// Number of levels included from each side.
     pub depth_levels: usize,
 }
 
+/// Validates an order book and derives top-of-book and depth metrics.
+///
+/// Inputs do not need to be sorted. Depth is calculated from the best prices after sorting, and
+/// asymmetric books are reduced to the same effective number of levels on both sides so the
+/// imbalance compares equivalent portions of the book.
+///
+/// # Errors
+///
+/// Returns a [`DomainError`] when either side is empty, a level is invalid, the book is crossed or
+/// locked, the requested depth is zero, or checked decimal arithmetic cannot represent a result.
 pub fn calculate(
     bids: &[BookLevel],
     asks: &[BookLevel],

@@ -1,3 +1,9 @@
+//! Centralized environment configuration and startup validation.
+//!
+//! Environment access is deliberately confined to this module. The rest of the service receives
+//! a validated [`Config`], so unsupported mainnet use, ambiguous data sources, and invalid timing
+//! relationships fail before any background task starts.
+
 use std::env;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -5,10 +11,14 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+/// Controls log formatting and other environment-sensitive behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEnvironment {
+    /// Human-readable local output.
     Development,
+    /// Structured container-oriented output.
     Production,
+    /// Deterministic test behavior.
     Test,
 }
 
@@ -28,18 +38,27 @@ impl FromStr for AppEnvironment {
     }
 }
 
+/// Supported Nexus network.
+///
+/// The single variant is intentional: this portfolio service refuses mainnet configuration and
+/// never accepts credentials or submits orders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NexusNetwork {
+    /// Public Nexus Exchange testnet.
     Testnet,
 }
 
+/// Selects the upstream implementation feeding the shared market state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketDataSourceMode {
+    /// Bundled deterministic frames with explicit failure injection for demonstrations.
     Replay,
+    /// Public Nexus testnet REST and WebSocket integration through the official SDK.
     NexusLive,
 }
 
 impl MarketDataSourceMode {
+    /// Stable label used by API responses, metrics, and persisted provenance.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Replay => "replay",
@@ -47,6 +66,7 @@ impl MarketDataSourceMode {
         }
     }
 
+    /// User-facing network label; replay is never represented as testnet data.
     pub const fn network_label(self) -> &'static str {
         match self {
             Self::Replay => "demo",
@@ -71,6 +91,7 @@ impl FromStr for MarketDataSourceMode {
 }
 
 impl NexusNetwork {
+    /// Stable network label used in logs and configuration output.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Testnet => "testnet",
@@ -94,22 +115,40 @@ impl FromStr for NexusNetwork {
     }
 }
 
+/// Validated runtime configuration shared by application components.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Deployment environment.
     pub app_env: AppEnvironment,
+    /// Interface on which the HTTP server listens.
     pub http_host: IpAddr,
+    /// Port on which the HTTP server listens.
     pub http_port: u16,
+    /// PostgreSQL connection string. It is never written to logs.
     pub database_url: String,
+    /// Live or deterministic replay market-data implementation.
     pub market_data_source: MarketDataSourceMode,
+    /// Nexus network, constrained to testnet.
     pub nexus_network: NexusNetwork,
+    /// Single market tracked by this MVP.
     pub nexus_market: String,
+    /// Period between durable snapshots and live REST refreshes.
     pub snapshot_interval: Duration,
+    /// Maximum acceptable age of the last exchange update.
     pub stale_after: Duration,
+    /// Per-operation timeout for Nexus REST calls.
     pub rest_timeout: Duration,
+    /// `tracing_subscriber` filter expression.
     pub rust_log: String,
 }
 
 impl Config {
+    /// Loads `.env` when present, reads environment variables once, and validates the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] for missing required values, parse failures, unsupported modes, or
+    /// timing settings that would make stale detection unreliable.
     pub fn from_env() -> Result<Self, ConfigError> {
         let _ = dotenvy::dotenv();
 
@@ -135,6 +174,7 @@ impl Config {
         Ok(config)
     }
 
+    /// Enforces cross-field and product-scope invariants.
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.database_url.trim().is_empty() {
             return Err(ConfigError::Missing("DATABASE_URL"));
@@ -180,6 +220,7 @@ impl Config {
         Ok(())
     }
 
+    /// Returns the complete HTTP listen address.
     pub fn socket_addr(&self) -> std::net::SocketAddr {
         std::net::SocketAddr::new(self.http_host, self.http_port)
     }
@@ -223,10 +264,13 @@ where
         })
 }
 
+/// Configuration failure reported before the service starts.
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    /// A required environment variable was not defined.
     #[error("missing required environment variable {0}")]
     Missing(&'static str),
+    /// An environment variable was present but violated its contract.
     #[error("invalid {name}: {reason}")]
     InvalidValue { name: &'static str, reason: String },
 }

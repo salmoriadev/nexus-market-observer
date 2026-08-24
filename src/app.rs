@@ -1,3 +1,10 @@
+//! Application composition and coordinated process lifecycle.
+//!
+//! PostgreSQL is a startup dependency because migrations must succeed before the API can serve.
+//! Nexus is deliberately not a startup dependency: collectors can report degraded state and keep
+//! retrying while the HTTP process remains available. Shutdown uses cancellation tokens followed
+//! by bounded joins so no background task is abandoned silently.
+
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::process::ExitCode;
@@ -19,6 +26,17 @@ use crate::state::{MarketState, ServiceStatus, SharedMarketState};
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Starts all application components and runs until a shutdown signal or HTTP server failure.
+///
+/// Startup order is intentional: metrics and database schema are ready before collectors can
+/// publish data, and the HTTP listener is bound before worker tasks are spawned. On shutdown,
+/// background work is cancelled, HTTP connections receive a bounded drain window, workers are
+/// joined, and the database pool is closed last.
+///
+/// # Errors
+///
+/// Returns [`AppError`] when required startup infrastructure fails or the HTTP server terminates
+/// unexpectedly. Temporary Nexus and post-startup PostgreSQL failures are handled by their workers.
 pub async fn run(config: Config) -> Result<(), AppError> {
     let prometheus =
         crate::telemetry::init_metrics(&config.nexus_market).map_err(AppError::Task)?;
@@ -45,6 +63,7 @@ pub async fn run(config: Config) -> Result<(), AppError> {
     let listener = tokio::net::TcpListener::bind(config.socket_addr()).await?;
     tracing::info!(address = %config.socket_addr(), "HTTP server listening");
 
+    // Both sources own the same state contract; only their ingestion and recovery mechanics differ.
     let collector = match config.market_data_source {
         MarketDataSourceMode::Replay => {
             let source = ReplaySource::bundled()?;
@@ -97,6 +116,8 @@ pub async fn run(config: Config) -> Result<(), AppError> {
             .await
     });
 
+    // An unexpected server exit is treated like a shutdown trigger, but retained as the final
+    // application error after the remaining resources are drained.
     let server_finished = tokio::select! {
         _ = wait_for_shutdown_signal() => {
             tracing::info!("shutdown signal received; stopping workers and HTTP server");
@@ -211,6 +232,10 @@ async fn wait_for_shutdown_signal() {
     }
 }
 
+/// Loads configuration, initializes tracing, and maps application completion to a process code.
+///
+/// Configuration errors are written directly to stderr because tracing is intentionally configured
+/// only after `RUST_LOG` and the environment mode have been validated.
 pub async fn main_entry() -> ExitCode {
     let config = match Config::from_env() {
         Ok(config) => config,
@@ -232,6 +257,10 @@ pub async fn main_entry() -> ExitCode {
     }
 }
 
+/// Performs the lightweight liveness check used by the Docker image.
+///
+/// This probes `/metrics`, not `/health`: temporary loss of Nexus data affects readiness and API
+/// status, but should not cause Docker to restart an otherwise functioning recovery loop.
 pub fn container_healthcheck() -> ExitCode {
     let port = match Config::from_env() {
         Ok(config) => config.http_port,

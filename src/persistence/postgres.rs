@@ -1,3 +1,10 @@
+//! PostgreSQL implementation for snapshots and historical reads.
+//!
+//! Queries are parameterized and financial values bind directly as PostgreSQL `NUMERIC`. Embedded
+//! migrations own the schema contract. Startup connection retry is bounded because migrations are
+//! mandatory, while runtime query failures are handled by the persistence worker without bringing
+//! down collection or HTTP serving.
+
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -11,26 +18,31 @@ use super::{HistoryPoint, HistoryReader, PersistableSnapshot};
 const STARTUP_DATABASE_RETRY_WINDOW: Duration = Duration::from_secs(30);
 const DATABASE_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Cloneable SQLx repository backed by a shared PostgreSQL pool.
 #[derive(Debug, Clone)]
 pub struct PostgresRepository {
     pool: PgPool,
 }
 
 impl PostgresRepository {
+    /// Wraps an initialized pool.
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
+    /// Applies all embedded migrations before workers and HTTP serving begin.
     pub async fn migrate(&self) -> Result<(), AppError> {
         sqlx::migrate!("./migrations").run(&self.pool).await?;
         Ok(())
     }
 
+    /// Checks whether the pool can execute a minimal query.
     pub async fn ping(&self) -> Result<(), AppError> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
     }
 
+    /// Inserts or refreshes the stable market identity used by snapshot foreign keys.
     pub async fn upsert_market(&self, market_id: &str, symbol: &str) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -47,6 +59,10 @@ impl PostgresRepository {
         Ok(())
     }
 
+    /// Persists one validated periodic snapshot.
+    ///
+    /// Returns `true` when a row was inserted and `false` when the database uniqueness constraint
+    /// recognized the same source update from an earlier interval or process run.
     pub async fn persist_snapshot(&self, snapshot: &PersistableSnapshot) -> Result<bool, AppError> {
         self.upsert_market(&snapshot.market_id, &snapshot.symbol)
             .await?;
@@ -79,6 +95,7 @@ impl PostgresRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    /// Exposes the pool for integration-test assertions and controlled lifecycle operations.
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
@@ -117,7 +134,15 @@ impl HistoryReader for PostgresRepository {
     }
 }
 
+/// Connects to PostgreSQL within the bounded startup retry window.
+///
+/// # Errors
+///
+/// Returns [`AppError`] after approximately 30 seconds without a successful pool connection. The
+/// URL is used by SQLx but never included in service logs.
 pub async fn connect_with_retry(database_url: &str) -> Result<PgPool, AppError> {
+    // PostgreSQL is the only bounded startup dependency: without it the schema cannot be migrated.
+    // Once startup succeeds, SQL errors are retried indefinitely by the persistence worker.
     let started_at = Instant::now();
     let mut attempt = 0_u32;
     loop {

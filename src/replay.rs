@@ -1,3 +1,10 @@
+//! Deterministic market-data source for portfolio demonstrations and tests.
+//!
+//! Replay mode exercises the same state, analytics, persistence, API, and telemetry paths as the
+//! live collector. Its provenance is always exposed as `replay` on API responses, metrics, and
+//! database rows; it is never represented as Nexus testnet data. The timeline deliberately injects
+//! a sequence gap and a disconnection so recovery behavior is visible without an unstable upstream.
+
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -18,6 +25,10 @@ const FAILURE_HOLD: Duration = Duration::from_secs(2);
 const GAP_STEP: u64 = 8;
 const DISCONNECT_STEP: u64 = 16;
 
+/// Validated replay fixture ready to feed the collector.
+///
+/// Construction rejects malformed decimal values and invalid order books before the asynchronous
+/// task starts, making runtime frames deterministic and safe to publish.
 #[derive(Debug, Clone)]
 pub struct ReplaySource {
     market: CatalogMarket,
@@ -51,6 +62,12 @@ struct RawReplayFrame {
 }
 
 impl ReplaySource {
+    /// Loads and validates the fixture embedded in the service binary at compile time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError`] if the bundled JSON, market identity, decimal values, or any frame is
+    /// invalid.
     pub fn bundled() -> Result<Self, AppError> {
         Self::from_json(include_str!("../fixtures/replay/btc-usdx-perp.json"))
     }
@@ -81,6 +98,8 @@ impl ReplaySource {
                 "bundled replay fixture identifies an unexpected market".to_string(),
             ));
         }
+        // Validate every frame up front. The running collector should only model source failures,
+        // never discover a broken bundled artifact halfway through a demonstration.
         for frame in &frames {
             calculate(&frame.bids, &frame.asks, ANALYTICS_DEPTH_LEVELS)?;
         }
@@ -109,6 +128,11 @@ fn parse_levels(raw: Vec<[String; 2]>) -> Result<Vec<BookLevel>, AppError> {
         .collect()
 }
 
+/// Runs the deterministic collector until cancellation.
+///
+/// A one-second Tokio interval advances the fixture. At fixed steps the task models a sequence gap
+/// and a disconnect, holds the failed state long enough for health polling to observe it, then
+/// resynchronizes from the replay source. All waits remain cancellation-aware for prompt shutdown.
 pub async fn run_replay_collector(
     source: ReplaySource,
     state: SharedMarketState,
@@ -129,6 +153,8 @@ pub async fn run_replay_collector(
     let mut sequence = 1_000_i64;
     let mut frame_index = 1_usize;
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
+    // Dropping missed ticks prevents a paused or overloaded process from replaying a burst of stale
+    // frames. The first immediate interval tick is consumed before entering the loop.
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ticker.tick().await;
 
@@ -203,6 +229,8 @@ async fn apply_update(
         return;
     };
     let metrics_snapshot = analytics.clone();
+    // Analytics and frame preparation happen before the lock. The critical section only swaps the
+    // in-memory snapshot; metric recording is deliberately kept outside it.
     {
         let mut current = state.write().await;
         current.source_connection = SourceConnection::Connected;
@@ -274,6 +302,7 @@ async fn mark_degraded(state: &SharedMarketState, error: String) {
 }
 
 async fn wait_or_cancel(cancellation: &CancellationToken, duration: Duration) -> bool {
+    // Failure holds must not delay graceful shutdown.
     tokio::select! {
         _ = cancellation.cancelled() => true,
         _ = tokio::time::sleep(duration) => false,

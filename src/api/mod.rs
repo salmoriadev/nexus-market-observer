@@ -1,3 +1,8 @@
+//! Read-only Axum API and request instrumentation.
+//!
+//! The router exposes current in-memory state, PostgreSQL history, liveness/readiness detail, and
+//! Prometheus metrics. It contains no write endpoints or authenticated trading functionality.
+
 pub mod handlers;
 pub mod models;
 
@@ -18,16 +23,30 @@ use crate::config::Config;
 use crate::persistence::HistoryReader;
 use crate::state::SharedMarketState;
 
+/// Dependencies shared by all HTTP handlers.
+///
+/// The history reader is a narrow trait boundary so router tests can exercise API behavior without
+/// PostgreSQL. Market state and database health are shared with their background workers.
 #[derive(Clone)]
 pub struct AppContext {
+    /// Validated immutable service configuration.
     pub config: Arc<Config>,
+    /// Latest validated market snapshot and lifecycle state.
     pub market_state: SharedMarketState,
+    /// Read-only historical snapshot provider.
     pub history_reader: Arc<dyn HistoryReader>,
+    /// Last observed PostgreSQL connectivity state.
     pub database_connected: Arc<AtomicBool>,
+    /// Monotonic process start used for uptime reporting.
     pub started_at: Instant,
+    /// Render handle for the installed Prometheus recorder.
     pub prometheus: PrometheusHandle,
 }
 
+/// Builds the complete public router for an application context.
+///
+/// Request metrics are applied only to matched API routes, with centralized fallbacks preserving a
+/// consistent JSON error contract.
 pub fn router(context: AppContext) -> Router {
     Router::new()
         .route("/health", get(handlers::health))
@@ -50,6 +69,8 @@ async fn track_http_metrics(request: Request<axum::body::Body>, next: Next) -> R
         "OPTIONS" => "OPTIONS",
         _ => "OTHER",
     };
+    // Use Axum's route template instead of the raw URI so arbitrary market symbols cannot create
+    // unbounded Prometheus label cardinality.
     let route = request
         .extensions()
         .get::<MatchedPath>()

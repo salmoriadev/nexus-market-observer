@@ -1,3 +1,9 @@
+//! Thin adapter around the pinned official `nexus-exchange` SDK.
+//!
+//! REST responses and transport errors are converted here so analytics and shared state depend on
+//! decimal-safe domain models. All external REST operations are bounded by the configured timeout,
+//! and construction is hard-coded to public testnet endpoints.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,15 +16,25 @@ use crate::analytics::BookLevel;
 use crate::error::AppError;
 use crate::state::CatalogMarket;
 
+/// Authoritative REST order-book snapshot converted into service domain types.
 #[derive(Debug, Clone)]
 pub struct NexusSnapshot {
+    /// Market symbol returned by Nexus, verified against the request before use.
     pub symbol: String,
+    /// Complete bid side as decimal values.
     pub bids: Vec<BookLevel>,
+    /// Complete ask side as decimal values.
     pub asks: Vec<BookLevel>,
+    /// Source nonce used for snapshot identity and persistence deduplication.
     pub nonce: i64,
+    /// Exchange-provided update time, used for stale detection instead of local receipt time.
     pub source_updated_at: DateTime<Utc>,
 }
 
+/// Public testnet client with service-level timeout and user-agent policy.
+///
+/// The client is shared because the official SDK internally owns its HTTP and subscription state;
+/// no credentials or authenticated endpoints are configured.
 #[derive(Clone)]
 pub struct NexusAdapter {
     client: Arc<Client>,
@@ -36,6 +52,7 @@ impl std::fmt::Debug for NexusAdapter {
 }
 
 impl NexusAdapter {
+    /// Creates an adapter restricted to the official Nexus testnet network.
     pub fn testnet(operation_timeout: Duration) -> Self {
         let sdk_config = SdkConfig::new(Network::Testnet)
             .with_timeout(operation_timeout)
@@ -49,6 +66,14 @@ impl NexusAdapter {
         }
     }
 
+    /// Fetches and reduces the public market catalog.
+    ///
+    /// The configured market is only marked as tracked when its exact ID exists; callers must treat
+    /// absence as degraded rather than silently selecting another market.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Nexus`] on timeout or an SDK request failure.
     pub async fn fetch_catalog(
         &self,
         tracked_market: &str,
@@ -70,6 +95,11 @@ impl NexusAdapter {
             .collect())
     }
 
+    /// Fetches one complete public order-book snapshot through the official SDK.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError`] on timeout, transport failure, or invalid source timestamp.
     pub async fn fetch_snapshot(&self, market: &str) -> Result<NexusSnapshot, AppError> {
         let book =
             tokio::time::timeout(self.operation_timeout, self.client.fetch_order_book(market))
@@ -82,6 +112,10 @@ impl NexusAdapter {
         snapshot_from_sdk(book)
     }
 
+    /// Opens the official SDK subscription for the current `book` channel contract.
+    ///
+    /// The subscription is used for connectivity, sequencing, and change notification. Its opaque
+    /// payload is not guessed into local deltas; the stream coordinator refreshes from REST.
     pub fn subscribe_book(&self, market: &str) -> Subscription {
         self.client.connect(vec![json!({
             "op": "subscribe",
