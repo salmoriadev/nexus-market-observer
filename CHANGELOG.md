@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## Unreleased
 
+## 0.1.1 - 2026-08-24
+
 ### Added
 
 - Open-source contribution, security, issue, pull-request, and dependency-update guidance.
@@ -18,6 +20,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - Host-network mode preserves custom database URLs and applies alternate backend ports consistently.
 - Compose contracts are checked automatically in CI.
 - External PostgreSQL deployments can disable the bundled database with a dedicated Compose override.
+- The official Nexus Exchange SDK is pinned to `0.10.0` while retaining API `v0.8.1`.
+- Prometheus exporter, Tower HTTP, and the checkout action use their current validated releases.
+- Dependabot groups only Cargo patch updates; Rust toolchain changes remain an intentional cross-file upgrade.
 
 ### Fixed
 

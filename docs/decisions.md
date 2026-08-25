@@ -62,7 +62,7 @@
 
 ## ADR-007: Explicit deterministic replay source
 
-**Context.** The public Nexus Exchange Testnet has been intermittently unavailable, and SDK 0.9.1 does not publish a usable Testnet WebSocket origin. A portfolio evaluator still needs a reproducible way to inspect the complete pipeline.
+**Context.** The public Nexus Exchange Testnet has been intermittently unavailable, and SDK 0.10.0 does not publish a usable Testnet WebSocket origin. A portfolio evaluator still needs a reproducible way to inspect the complete pipeline.
 
 **Decision.** Provide an explicit `replay` source alongside `nexus_live`. Replay uses versioned deterministic fixtures, reports network `demo`, never contacts Nexus, and remains isolated by API provenance, database columns, history filtering, and Compose project volumes.
 

@@ -1,5 +1,7 @@
 # Nexus Market Observer
 
+[![CI](https://github.com/salmoriadev/nexus-market-observer/actions/workflows/ci.yml/badge.svg)](https://github.com/salmoriadev/nexus-market-observer/actions/workflows/ci.yml)
+
 An unofficial fault-tolerant Rust service for ingesting, analyzing, persisting, and monitoring Nexus Exchange market data.
 
 Rust · Tokio · Axum · PostgreSQL · SQLx · Prometheus · Grafana
@@ -51,7 +53,7 @@ The replay fixture is not claimed to be recorded history. Its initial shape is b
 
 Exchange market data is transient and failure-prone. A useful backend must distinguish a current, consistent book from stale or incomplete data, preserve financial precision, remain observable while dependencies recover, and avoid turning a high-frequency feed into unnecessary database growth.
 
-The public Nexus Exchange Testnet currently makes a live portfolio demonstration unreliable: REST availability has been intermittent and official SDK 0.9.1 exposes no usable public Testnet WebSocket origin. Replay mode makes the internal system reproducible without weakening the honesty of live mode.
+The public Nexus Exchange Testnet currently makes a live portfolio demonstration unreliable: REST availability has been intermittent and official SDK 0.10.0 exposes no usable public Testnet WebSocket origin. Replay mode makes the internal system reproducible without weakening the honesty of live mode.
 
 ## Architecture
 
@@ -82,7 +84,7 @@ One crate produces one service. Collection, persistence, stale detection, and HT
 
 ## Features
 
-- Official `nexus-exchange` SDK integration pinned to `0.9.1`.
+- Official `nexus-exchange` SDK integration pinned to `0.10.0`.
 - Explicit replay and Testnet-live modes with provenance in API, PostgreSQL, metrics, logs, and isolated Compose volumes.
 - Deterministic replay of snapshot, updates, sequence gap, stale state, REST-style resync, disconnect, reconnect, and recovery.
 - `Starting`, `Connecting`, `Resyncing`, `Healthy`, `Stale`, `Reconnecting`, `Degraded`, and `ShuttingDown` states.
@@ -94,22 +96,23 @@ One crate produces one service. Collection, persistence, stale detection, and HT
 ## Technology stack
 
 - Rust 1.88.0, Tokio, Axum, Serde, thiserror, tower-http, and tracing.
-- Official `nexus-exchange` Rust SDK **0.9.1** and Nexus Exchange API **v0.8.1**.
+- Official `nexus-exchange` Rust SDK **0.10.0** and Nexus Exchange API **v0.8.1**.
 - SQLx and PostgreSQL 17.
 - rust_decimal, metrics, Prometheus 3, and Grafana 12.
 - Docker, Docker Compose, and GitHub Actions.
 
 ### Verified Nexus contract
 
-The integration was inspected on 2026-08-20 and manually revalidated on 2026-08-21 against the official [nexus-xyz organization](https://github.com/nexus-xyz), [`nexus-exchange-rs` revision `0e797a3`](https://github.com/nexus-xyz/nexus-exchange-rs/tree/0e797a3984e8886e1cf5ab018c2c3589681813c7), and [`nexus-exchange-api` revision `19f8081`](https://github.com/nexus-xyz/nexus-exchange-api/tree/19f808110f80027009b43fbc0768702a7315a658):
+The integration was manually revalidated on 2026-08-24 against the official [nexus-xyz organization](https://github.com/nexus-xyz), [`nexus-exchange-rs` release `v0.10.0`](https://github.com/nexus-xyz/nexus-exchange-rs/tree/v0.10.0), and [`nexus-exchange-api` release `v0.8.1`](https://github.com/nexus-xyz/nexus-exchange-api/tree/v0.8.1):
 
-- SDK release commit: `0e797a3984e8886e1cf5ab018c2c3589681813c7`.
-- API revision: `19f808110f80027009b43fbc0768702a7315a658`; OpenAPI version `0.8.1`.
+- SDK release commit: `abe1291e3fff9865910b063a1def85540b776161`.
+- API release commit: `0bb1c2747e69dd900fbdcfcd85f719248c1e6378`; OpenAPI version `0.8.1`.
 - SDK minimum Rust version `1.86`; the locked application graph uses Rust `1.88.0`.
 - Public channel name `book`; envelopes include `subscribed`, `event`, and `out_of_sync` with stream sequences.
 - The payload is opaque and may represent snapshots or deltas, so the live adapter uses valid events as change notifications and performs a debounced REST refresh rather than inventing a reconstruction algorithm.
-- SDK 0.9.1 reports no usable Testnet WebSocket origin (`ENG-3398`). Live mode retries the SDK subscription and uses rate-limited REST refresh while exposing degraded connection health.
-- The legacy Testnet REST market endpoints returned a real four-market catalog and `BTC-USDX-PERP` snapshots without credentials during the 2026-08-21 manual check. The newer per-network hosts are documented upstream but were still pending DNS/TLS rollout at the pinned revision, so live availability remains an external condition rather than a CI guarantee.
+- SDK 0.10.0 reports no usable Testnet WebSocket origin (`ENG-3398`). Live mode retries the SDK subscription and uses rate-limited REST refresh while exposing degraded connection health.
+- The current WebSocket guide documents a token plus `/stream` bootstrap, while the pinned OpenAPI/typed SDK use the `/ws` protocol. The service does not combine those incompatible contracts or guess an origin.
+- The legacy Testnet REST market endpoints returned a real four-market catalog and `BTC-USDX-PERP` snapshots without credentials during the 2026-08-24 manual check. The newer per-network hosts remained unavailable, so live availability is an external condition rather than a CI guarantee.
 
 ## Running the live integration
 
@@ -262,7 +265,7 @@ See [docs/decisions.md](docs/decisions.md) for the ADRs.
 
 ## Limitations
 
-- Nexus SDK 0.9.1 has no usable public Testnet WebSocket origin.
+- Nexus SDK 0.10.0 has no usable public Testnet WebSocket origin.
 - The public Exchange Testnet REST endpoint has shown intermittent availability.
 - The published book event payload is not sufficiently specified for safe local delta reconstruction.
 - Only one market is tracked per process.
