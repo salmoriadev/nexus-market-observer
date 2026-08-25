@@ -170,21 +170,21 @@ mod tests {
     #[test]
     fn parses_official_rest_snapshot_shape() {
         // Sanitized from GET /api/exchange/api/v1/markets/BTC-USDX-PERP/orderbook
-        // on Nexus Exchange Testnet, verified on 2026-08-20.
+        // on Nexus Exchange Testnet, verified on 2026-08-24 (Brazil/East).
         let book = serde_json::from_value::<nexus_exchange::types::OrderBook>(json!({
             "symbol": "BTC-USDX-PERP",
-            "bids": [[73805.5, 0.001], [73790.5, 0.065]],
-            "asks": [[73864.0, 0.015], [73867.5, 0.012]],
-            "timestamp": 1787272091491_i64,
-            "datetime": "2026-08-21T00:28:11.491Z",
-            "nonce": 61925
+            "bids": [[80648.0, 0.065], [80642.5, 0.055]],
+            "asks": [[80760.0, 0.001], [80761.0, 0.015]],
+            "timestamp": 1787624581670_i64,
+            "datetime": "2026-08-25T02:23:01.670Z",
+            "nonce": 406377
         }))
         .expect("official fixture should deserialize through SDK types");
         let snapshot = snapshot_from_sdk(book).expect("valid snapshot");
         assert_eq!(snapshot.symbol, "BTC-USDX-PERP");
-        assert_eq!(snapshot.nonce, 61925);
-        assert_eq!(snapshot.bids[0].price, dec!(73805.5));
-        assert_eq!(snapshot.asks[0].amount, dec!(0.015));
+        assert_eq!(snapshot.nonce, 406377);
+        assert_eq!(snapshot.bids[0].price, dec!(80648.0));
+        assert_eq!(snapshot.asks[0].amount, dec!(0.001));
     }
 
     #[test]

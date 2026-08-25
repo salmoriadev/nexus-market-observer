@@ -31,7 +31,7 @@ const WS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(500);
 /// This is an upstream limitation tracked as Nexus ENG-3398, not a simulated success path. REST
 /// snapshots may remain usable, but live mode stays explicitly degraded while disconnected.
 pub const REST_REFRESH_FALLBACK_REASON: &str =
-    "official Nexus SDK 0.9.1 has no usable testnet WebSocket origin (ENG-3398); REST refresh fallback is active";
+    "official Nexus SDK 0.10.0 has no usable testnet WebSocket origin (ENG-3398); REST refresh fallback is active";
 
 /// Small internal event vocabulary derived from official SDK events and typed envelopes.
 #[derive(Debug, Clone, PartialEq)]

@@ -5,8 +5,9 @@ updates:
     schedule:
       interval: weekly
     groups:
-      rust-dependencies:
+      rust-patch-updates:
         patterns: ["*"]
+        update-types: ["patch"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
@@ -25,4 +26,7 @@ updates:
     groups:
       container-images:
         patterns: ["*"]
+    ignore:
+      # Rust must move together in Cargo.toml, rust-toolchain.toml, CI, and Dockerfile.
+      - dependency-name: rust
     open-pull-requests-limit: 5
