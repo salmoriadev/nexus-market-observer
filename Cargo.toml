@@ -22,7 +22,7 @@ dotenvy = "0.15"
 futures-util = "0.3"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
-nexus-exchange = "=0.10.0"
+nexus-exchange = "=0.11.0"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
